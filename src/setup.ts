@@ -19,6 +19,7 @@ import {
   loadConfigStore,
 } from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
+import { normalizeTotpEnrollment } from "./auth/totp.js";
 import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 import { AUTH_COMMAND, DOCTOR_COMMAND } from "./utils/commands.js";
@@ -68,7 +69,7 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
     usernameLabel: "Purdue career account username or full email",
-    mfaNote: "Microsoft Authenticator number matching can run without a browser window.",
+    mfaNote: "An optional saved authenticator key can answer verification-code challenges automatically.",
   },
   suny: {
     name: "SUNY",
@@ -385,6 +386,7 @@ export interface WizardAnswers {
   baseUrl: string;
   username: string;
   password: string;
+  totpUri?: string;
   headless: boolean;
   /** Left undefined, the saved choice for the same school is kept. */
   rememberMfa?: boolean;
@@ -437,6 +439,7 @@ export function buildConfigToSave(
     // Always the freshly typed one: a carried v1 plaintext password would
     // otherwise be the value written to the native store.
     password: answers.password,
+    ...(answers.totpUri ? { totpUri: answers.totpUri } : {}),
     headless: answers.headless,
   };
   if (answers.rememberMfa !== undefined) config.rememberMfa = answers.rememberMfa;
@@ -563,6 +566,23 @@ async function main(): Promise<void> {
   }
   console.log("");
 
+  let totpUri: string | undefined;
+  if (new URL(baseUrl).origin === "https://purdue.brightspace.com") {
+    console.log(dim("  Optional: use the setup key already enrolled in your authenticator or Purdue SSO extension."));
+    console.log(dim("  A current six-digit code will not work. Press Enter to keep any saved key."));
+    while (true) {
+      const input = await askPassword("Authenticator setup key or otpauth URI (optional): ");
+      if (!input) break;
+      try {
+        totpUri = normalizeTotpEnrollment(input, username);
+        break;
+      } catch {
+        console.log(yellow("  Enter a valid setup key or otpauth URI, or press Enter to skip."));
+      }
+    }
+    console.log("");
+  }
+
   // Re-open readline for remaining prompts
   let rl2 = readline.createInterface({
     input: process.stdin,
@@ -627,6 +647,7 @@ async function main(): Promise<void> {
     baseUrl,
     username,
     password,
+    totpUri,
     headless,
     rememberMfa,
     campus: campus || undefined,
@@ -634,6 +655,7 @@ async function main(): Promise<void> {
 
   await saveSecureConfig(config);
   console.log(green("  Password saved in your operating system credential store."));
+  if (totpUri) console.log(green("  Authenticator enrollment saved in your operating system credential store."));
   console.log(green("  Config saved to: " + getConfigStorePath()));
   console.log("");
 

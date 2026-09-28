@@ -34,6 +34,8 @@ export class UnsupportedAuthenticationError extends BrowserAuthError {
   }
 }
 
+export class AutomaticCodeAuthenticationError extends UnsupportedAuthenticationError {}
+
 export class MfaApprovalError extends BrowserAuthError {
   readonly code = "AUTH_MFA_FAILED";
   /**
@@ -71,15 +73,17 @@ export interface SSOFlow {
  * else uses the default flow, which already covers the common Shibboleth,
  * CAS, and Microsoft Entra forms.
  */
-export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode, onMfaChallenge?: OnMfaChallenge): SSOFlow {
+export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode, onMfaChallenge?: OnMfaChallenge, onAutomaticPending?: () => void): SSOFlow {
   const credentials = {
     username: config.username,
     password: config.password,
+    totpUri: new URL(config.baseUrl).hostname === "purdue.brightspace.com" ? config.totpUri : undefined,
     baseUrl: config.baseUrl,
     headless: config.headless,
     rememberMfa: config.rememberMfa,
     requestMfaCode,
     onMfaChallenge,
+    onAutomaticPending,
   };
 
   if (isTUDelftBrightspace(config.baseUrl)) {

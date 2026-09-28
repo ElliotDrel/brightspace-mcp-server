@@ -59,6 +59,7 @@ function pollWindowMs(elapsedMs: number): number {
  */
 const MFA_NUMBER_MARKER = /^MFA_NUMBER:(\d{1,3})$/;
 const MFA_PENDING_MARKER = /^MFA_PENDING$/;
+const AUTOMATIC_PENDING_MARKER = /^AUTH_AUTOMATIC_PENDING$/;
 
 /** The mfaPending kind and message, with or without number-match digits. */
 function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, string] {
@@ -67,7 +68,7 @@ function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, s
     : ["mfaPending", "An MFA approval was not completed in time. Try again."];
 }
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending";
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending";
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -178,7 +179,7 @@ export class AuthRunner {
    * childDone. Lets a later joiner re-answer immediately instead of
    * discovering the challenge is stale only after blocking on childDone.
    */
-  private pendingChallenge: { numberMatch?: string } | null = null;
+  private pendingChallenge: { kind: "mfaPending" | "automaticPending"; numberMatch?: string } | null = null;
   /** Resolves on the next marker from the current child; null between children. */
   private challengeSignal: Promise<void> | null = null;
   private readonly scriptPath: string;
@@ -213,10 +214,10 @@ export class AuthRunner {
       return await this.runOnce(startedAt);
     } catch (error) {
       const childDone = this.childDone;
-      if (!onChallenge || !childDone || !(error instanceof AuthProcessError) || error.kind !== "mfaPending") throw error;
+      if (!childDone || !(error instanceof AuthProcessError) || (error.kind !== "automaticPending" && (!onChallenge || error.kind !== "mfaPending"))) throw error;
       const windowMs = pollWindowMs(Date.now() - startedAt);
       if (windowMs <= 0) throw error;
-      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      try { if (error.kind === "mfaPending") onChallenge?.(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
       return this.awaitBackgroundChild(childDone, windowMs);
     }
   }
@@ -283,7 +284,9 @@ export class AuthRunner {
         if (settled) return;
         settled = true;
         const numberMatch = this.pendingChallenge?.numberMatch ?? challenge?.numberMatch;
-        reject(new AuthProcessError(...mfaPendingFailure(numberMatch), numberMatch));
+        reject(this.pendingChallenge?.kind === "automaticPending"
+          ? new AuthProcessError("automaticPending", "Automatic code sign-in is still running. Retry this tool to join the same login.")
+          : new AuthProcessError(...mfaPendingFailure(numberMatch), numberMatch));
       }, graceMs);
       graceTimer.unref?.();
       childDone.then(
@@ -399,10 +402,10 @@ export class AuthRunner {
       // a later number still overwrites a numberless pendingChallenge so a
       // fresh joiner sees it — see MFA_PENDING_MARKER's own comment.
       const publishChallenge = (matched: string | undefined) => {
-        const firstChallenge = this.pendingChallenge === null;
+        const firstChallenge = this.pendingChallenge === null || this.pendingChallenge.kind === "automaticPending";
         if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
         if (firstChallenge || matched) {
-          this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
+          this.pendingChallenge = { kind: "mfaPending", numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
         if (firstChallenge) resolveChallengeSignal();
         if (!callerSettled) {
@@ -453,6 +456,12 @@ export class AuthRunner {
           publishChallenge(numberMatch);
         } else if (MFA_PENDING_MARKER.test(line)) {
           publishChallenge(undefined);
+        } else if (AUTOMATIC_PENDING_MARKER.test(line)) {
+          if (!this.pendingChallenge) {
+            this.pendingChallenge = { kind: "automaticPending" };
+            resolveChallengeSignal();
+            settleCaller(new AuthProcessError("automaticPending", "Automatic code sign-in is still running. Retry this tool to join the same login."));
+          }
         } else {
           log("DEBUG", line);
         }

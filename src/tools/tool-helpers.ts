@@ -115,6 +115,7 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   failed:
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
     "or `brightspace-setup` if your saved school or username is wrong.",
+  automaticPending: "Automatic code sign-in is still running. Retry this tool to join the same background login; no phone approval is being requested.",
   mfaPending:
     "Approve the sign-in request on your phone (Microsoft Authenticator or Duo). " +
     "Tell the user that, then call this tool again right away without waiting for them to " +

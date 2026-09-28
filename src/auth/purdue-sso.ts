@@ -6,11 +6,13 @@
 
 import type { Locator, Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
+import { devActivity } from "../utils/dev-activity.js";
 import { log } from "../utils/logger.js";
-import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
+import { MfaApprovalError, UnsupportedAuthenticationError, AutomaticCodeAuthenticationError } from "./sso-flow.js";
 import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { generateTotp, secondsUntilFreshCode } from "./totp.js";
 import type { RememberMfaOutcome, RememberMfaResult } from "./microsoft-session.js";
 
 // Entra names its username field type=email/loginfmt; Shibboleth portals (USC's
@@ -110,6 +112,7 @@ const RESEND_CLICK_GUARD_MS = NUMBER_MATCH_POLL_MS * 2;
 interface PurdueSSOConfig {
   username?: string;
   password?: string;
+  totpUri?: string;
   baseUrl?: string;
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
@@ -127,6 +130,7 @@ interface PurdueSSOConfig {
    * user has since gone stale.
    */
   onMfaChallenge?: (number: string | null) => void;
+  onAutomaticPending?: () => void;
 }
 
 /** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
@@ -138,6 +142,7 @@ function signInName(username: string, baseUrl?: string): string {
 export class PurdueSSOFlow {
   private config: PurdueSSOConfig;
   private accountHintSubmitted = false;
+  private readonly methodClicked = new Set<string>();
   /** Authenticator codes asked for during this login. See submitMfaCode. */
   private mfaCodeAttempts = 0;
   /**
@@ -368,7 +373,10 @@ export class PurdueSSOFlow {
     if (!this.config.baseUrl) {
       throw new UnsupportedAuthenticationError("A school URL is required to verify authentication.");
     }
-    const deadline = Date.now() + MFA_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + MFA_TIMEOUT_MS;
+    let automaticAnnounced = false;
+    let duoChallengeObserved = false;
     let challenged = false;
     let announced: string | null = null;
     /** True once onMfaChallenge has been told about this login, number or not. */
@@ -395,14 +403,19 @@ export class PurdueSSOFlow {
           log("INFO", "Login successful - verified Brightspace home");
           return;
         }
-        if (await this.duoMfa.handle(page)) challenged = true;
+        if (await this.duoMfa.handle(page)) { challenged = true; duoChallengeObserved = true; }
         if (await this.submitMfaCode(page)) challenged = true;
+        if (await this.selectCodeMethod(page)) {
+          await page.waitForTimeout(500);
+          continue;
+        }
+        const manualRequired = !this.config.totpUri || duoChallengeObserved;
         const number = await this.readNumberMatch(page);
         if (number) sawNumber = true;
         const challengeVisible = number !== null ||
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false);
-        if (challengeVisible && !challenged) {
+        if (challengeVisible && !challenged && manualRequired) {
           await this.rememberMfaDevice(page);
           challenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
@@ -410,7 +423,7 @@ export class PurdueSSOFlow {
           announcedToCaller = true;
           lastAnnouncedNumber = number;
         }
-        if (number && number !== announced) {
+        if (number && number !== announced && manualRequired) {
           announced = number;
           log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
           if (!announcedToCaller || number !== lastAnnouncedNumber) {
@@ -429,7 +442,7 @@ export class PurdueSSOFlow {
         // request until MFA_TIMEOUT_MS; readNumberMatch on the next poll
         // picks up the fresh number, and the re-announce logic above tells
         // the caller about it.
-        if (sawNumber && number === null && new URL(page.url()).hostname === "login.microsoftonline.com") {
+        if (manualRequired && sawNumber && number === null && new URL(page.url()).hostname === "login.microsoftonline.com") {
           if (numberVanishedAt === null) numberVanishedAt = Date.now();
           resendNotFoundWarned = await this.tryResendNumberMatch(page, {
             resendCount,
@@ -442,6 +455,10 @@ export class PurdueSSOFlow {
             },
           });
         }
+        if (this.config.totpUri && !duoChallengeObserved && !automaticAnnounced && Date.now() - startedAt >= 15000) {
+          automaticAnnounced = true;
+          this.config.onAutomaticPending?.();
+        }
         await this.clickProvenKmsi(page);
         // The federated-domain trust prompt arrives after the IdP succeeds, so
         // it has to be caught by this loop rather than by enterCredentials.
@@ -450,9 +467,11 @@ export class PurdueSSOFlow {
       }
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
+      if (this.config.totpUri && !duoChallengeObserved) throw new AutomaticCodeAuthenticationError("Automatic code sign-in stopped before Brightspace was verified.", error as Error);
       if (challenged) throw new MfaApprovalError(error as Error, announced ?? undefined);
       throw new UnsupportedAuthenticationError("Automatic sign-in stopped before a supported MFA challenge completed.", error as Error);
     }
+    if (this.config.totpUri && !duoChallengeObserved) throw new AutomaticCodeAuthenticationError("Automatic code sign-in did not reach a verified Brightspace session within 5 minutes.");
     if (challenged) throw new MfaApprovalError(undefined, announced ?? undefined);
     throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");
   }
@@ -514,7 +533,7 @@ export class PurdueSSOFlow {
   private async submitMfaCode(page: Page): Promise<boolean> {
     const input = await this.firstVisible(page, MFA_CODE_SELECTORS);
     if (!input) return false;
-    if (this.config.headless === false) return false;
+    if (this.config.headless === false && !this.config.totpUri) return false;
     // Ask again only after Entra's rejection message. This runs on every
     // two-second poll, and Microsoft commonly leaves the field on screen while
     // it validates, so a lingering field alone would give a correct code a
@@ -537,9 +556,9 @@ export class PurdueSSOFlow {
       if (this.mfaCodeAttempts >= MAX_MFA_CODE_ATTEMPTS) {
         throw new BrowserAuthError(`Microsoft rejected ${this.mfaCodeAttempts} authenticator codes. Run \`${AUTH_COMMAND}\` to try again.`, "mfa_code");
       }
-      log("WARN", "Microsoft rejected that code. Enter the current one from your authenticator app.");
+      log("WARN", this.config.totpUri ? "Microsoft rejected the code; waiting for a fresh code before retrying." : "Microsoft rejected that code. Enter the current one from your authenticator app.");
     }
-    if (!this.config.requestMfaCode) {
+    if (!this.config.totpUri && !this.config.requestMfaCode) {
       throw new UnsupportedAuthenticationError(
         `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
       );
@@ -547,13 +566,22 @@ export class PurdueSSOFlow {
     await this.rememberMfaDevice(page);
     this.mfaCodeAttempts += 1;
     this.awaitingMfaCodeSettle = isRetry;
-    const code = await this.config.requestMfaCode();
+    let code: string;
+    if (this.config.totpUri) {
+      await this.assertExpectedMicrosoftAccount(page);
+      const remaining = secondsUntilFreshCode(this.config.totpUri);
+      if (isRetry || remaining < 5) await page.waitForTimeout(Math.ceil(remaining * 1000) + 100);
+      code = generateTotp(this.config.totpUri);
+    } else {
+      code = await this.config.requestMfaCode!();
+    }
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
     await input.fill(code);
     const submit = await this.firstVisible(page, MFA_CODE_SUBMIT_SELECTORS);
     if (submit) await submit.click();
     else await input.press("Enter");
     log("INFO", "Authenticator code submitted");
+    if (this.config.totpUri) devActivity("mfa_code_submitted");
     return true;
   }
 
@@ -590,6 +618,45 @@ export class PurdueSSOFlow {
     }
     this.rememberMfa = { outcome, at: new Date().toISOString() };
     log("INFO", `Entra remember-MFA checkbox: ${REMEMBER_MFA_LOG[outcome]}`);
+  }
+
+  /** Select Microsoft's code method only when an account-scoped key exists. */
+  private async selectCodeMethod(page: Page): Promise<boolean> {
+    if (!this.config.totpUri || this.mfaCodeAttempts > 0 || new URL(page.url()).hostname !== "login.microsoftonline.com") return false;
+    if (await this.firstVisible(page, MFA_CODE_SELECTORS)) return false;
+    await this.assertExpectedMicrosoftAccount(page);
+    for (const [step, label] of [
+      ["code", /^use a verification code$/i],
+      ["other", /^(?:I can.t use my .+ right now|sign in another way|use a different verification option)$/i],
+    ] as const) {
+      if (this.methodClicked.has(step)) continue;
+      const control = page.getByText(label).first();
+      if (!await control.isVisible().catch(() => false)) continue;
+      this.methodClicked.add(step);
+      await control.click();
+      devActivity("mfa_method_selected");
+      return true;
+    }
+    return false;
+  }
+
+  /** Never submit a code when Microsoft displays a different signed-in account. */
+  private async assertExpectedMicrosoftAccount(page: Page): Promise<void> {
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com" || !this.config.username) {
+      throw new UnsupportedAuthenticationError("Automatic Purdue code entry requires the expected Microsoft sign-in page and account.");
+    }
+    const expected = signInName(this.config.username, this.config.baseUrl).toLowerCase();
+    for (const selector of ["#displayName", "#signInName", "#userDisplayName"]) {
+      const account = page.locator(selector).first();
+      // These are alternative layouts, not required controls. textContent()
+      // auto-waits for a missing element for 30 seconds on every MFA poll.
+      if (await account.count() === 0) continue;
+      const value = await account.textContent({ timeout: 1000 }).catch(() => null);
+      const shown = value?.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0]?.toLowerCase();
+      if (shown && shown !== expected) {
+        throw new UnsupportedAuthenticationError("Microsoft is showing another account. Automatic Purdue code entry stopped.");
+      }
+    }
   }
 
   private async firstVisible(page: Page, selectors: readonly string[]): Promise<Locator | null> {

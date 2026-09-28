@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Brightspace MCP Server. Copyright (c) 2026 Rohan Muppa. MIT licensed. */
 
+import { configureDevActivity } from "./utils/dev-activity.js";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
 
   try {
     const config = await loadConfig();
+    configureDevActivity(config.sessionDir);
     console.error(`\n=== Brightspace Authentication v${pkg.version} ===\n`);
     console.error(config.headless
       ? "Authentication runs headlessly. MFA numbers and code prompts appear here."
@@ -69,7 +71,7 @@ async function main(): Promise<void> {
     const onMfaChallenge = automatic
       ? (number: string | null) => console.log(number ? `MFA_NUMBER:${number}` : "MFA_PENDING")
       : undefined;
-    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge }).authenticate({
+    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge, onAutomaticPending: automatic ? () => console.log("AUTH_AUTOMATIC_PENDING") : undefined }).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);

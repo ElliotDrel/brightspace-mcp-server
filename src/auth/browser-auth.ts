@@ -10,7 +10,7 @@ import { readFileSync, accessSync } from "node:fs";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError } from "./sso-flow.js";
+import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError, AutomaticCodeAuthenticationError } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
 import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
 import { isDuoPrompt } from "./duo-mfa.js";
@@ -70,6 +70,7 @@ export interface BrowserAuthOptions {
   requestMfaCode?: RequestMfaCode;
   /** See PurdueSSOConfig.onMfaChallenge — fired early so a caller can answer without blocking on the full MFA wait, and again if the number changes. */
   onMfaChallenge?: OnMfaChallenge;
+  onAutomaticPending?: () => void;
 }
 
 export class BrowserAuth {
@@ -80,7 +81,7 @@ export class BrowserAuth {
 
   constructor(config: AppConfig, options: BrowserAuthOptions = {}) {
     this.config = config;
-    this.ssoFlow = createSSOFlow(config, options.requestMfaCode, options.onMfaChallenge);
+    this.ssoFlow = createSSOFlow(config, options.requestMfaCode, options.onMfaChallenge, options.onAutomaticPending);
     this.stateStore = new BrowserStateStore(config.sessionDir);
     this.cooldown = new AuthCooldown(config.sessionDir);
   }
@@ -397,7 +398,7 @@ export class BrowserAuth {
         throw new UnsupportedAuthenticationError("The identity provider could not complete automatic sign-in.");
       }
     } catch (error) {
-      if (error instanceof MfaApprovalError) await this.cooldown.recordMfaFailure();
+      if ((error instanceof MfaApprovalError || error instanceof AutomaticCodeAuthenticationError)) await this.cooldown.recordMfaFailure();
       throw error;
     }
     if (!await this.hasLiveSession(page)) {

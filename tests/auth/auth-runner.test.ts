@@ -31,6 +31,42 @@ describe("AuthRunner", () => {
     vi.clearAllMocks();
   });
 
+  it("waits for automatic code recovery without announcing a manual phone challenge", async () => {
+    const announce = vi.fn();
+    const result = new AuthRunner().run(announce);
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(2000);
+    child.emit("close", 0);
+    expect(await result).toBe(true);
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("keeps automatic recovery alive after the caller budget and joins it on retry", async () => {
+    const runner = new AuthRunner();
+    const result = runner.run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "automaticPending", numberMatch: undefined });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(45000);
+    await failure;
+    expect(kill).not.toHaveBeenCalled();
+    const retry = runner.run();
+    child.emit("close", 0);
+    expect(await retry).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces automatic progress with a real manual challenge if one appears", async () => {
+    const runner = new AuthRunner();
+    const result = runner.run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(1000);
+    child.stdout.write("MFA_NUMBER:47\n");
+    await vi.advanceTimersByTimeAsync(44000);
+    await failure;
+    child.emit("close", 0);
+  });
+
   it("runs automatic authentication and forwards complete MFA lines", async () => {
     const progress = vi.fn();
     const runner = new AuthRunner({ onProgress: progress });

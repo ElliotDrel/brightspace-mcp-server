@@ -127,3 +127,7 @@ How often you're asked is up to your school, not this tool. Everything else abou
 ## For developers
 
 Tool reference, response fields, and environment variables: [LLMs.md](LLMs.md). What's safe to build against: [STABILITY.md](STABILITY.md). Licensed under the MIT License.
+
+## Local Purdue automatic code recovery
+
+This branch combines current upstream session renewal, background recovery and dev activity logging with account-scoped automatic TOTP. Existing enrollment stays in the native credential store; no seed or generated code is logged. Setup can save an existing enrollment, and accounts without enrollment retain upstream manual MFA behavior. Automatic sign-in prefers the verification-code method and checks the displayed account before entering a code. Microsoft may send a phone notification before the method switch; this is not a guarantee of notification-free sign-in.
