@@ -49,6 +49,8 @@ export interface AppConfig {
   headless: boolean;
   username?: string;
   password?: string;
+  /** Purdue authenticator enrollment, loaded from native credential storage. */
+  totpUri?: string;
   /** Campus within a shared multi-campus Brightspace instance. */
   campus?: string;
   courseFilter: CourseFilterConfig;

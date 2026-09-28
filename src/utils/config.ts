@@ -11,6 +11,7 @@ import dotenv from "dotenv";
 import type { AppConfig } from "../types/index.js";
 import { configStoreExists, loadConfigStore } from "./config-store.js";
 import { resolveStoredPassword } from "./secure-config.js";
+import { getStoredTotpUri } from "../auth/credential-store.js";
 import { migrateLegacyState } from "../auth/legacy-state.js";
 
 export async function loadConfig(): Promise<AppConfig> {
@@ -63,6 +64,8 @@ export async function loadConfig(): Promise<AppConfig> {
   const baseUrl = configuredUrl.origin;
   const username = process.env.D2L_USERNAME || store?.username;
   const password = await resolveStoredPassword(baseUrl, username, store);
+  const totpUri = baseUrl === "https://purdue.brightspace.com" && username
+    ? await getStoredTotpUri(baseUrl, username) ?? undefined : undefined;
   // A new account must never inherit another account's cookies, even at the same school.
   const sessionDir = accountSessionDirectory(sessionRoot, baseUrl, username);
   const legacyMigration = sessionDir !== sessionRoot ? await migrateLegacyState(sessionRoot) : undefined;
@@ -76,6 +79,7 @@ export async function loadConfig(): Promise<AppConfig> {
     headless,
     username,
     password,
+    totpUri,
     campus: process.env.D2L_CAMPUS || store?.campus,
     courseFilter: {
       includeCourseIds,

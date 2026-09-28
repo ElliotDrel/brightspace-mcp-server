@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 
 const fake = vi.hoisted(() => ({
-  dotenv: vi.fn(), password: vi.fn(), migrate: vi.fn(),
+  dotenv: vi.fn(), password: vi.fn(), totp: vi.fn(), migrate: vi.fn(),
   store: null as Record<string, unknown> | null,
 }));
 vi.mock("dotenv", () => ({ default: { config: fake.dotenv } }));
@@ -11,6 +11,7 @@ vi.mock("../../src/utils/config-store.js", () => ({
   loadConfigStore: () => fake.store,
 }));
 vi.mock("../../src/utils/secure-config.js", () => ({ resolveStoredPassword: fake.password }));
+vi.mock("../../src/auth/credential-store.js", () => ({ getStoredTotpUri: fake.totp }));
 vi.mock("../../src/auth/legacy-state.js", () => ({ migrateLegacyState: fake.migrate }));
 import { accountSessionDirectory, loadConfig } from "../../src/utils/config.js";
 
@@ -20,6 +21,7 @@ describe("resolved authentication configuration", () => {
     for (const key of Object.keys(process.env).filter(key => key.startsWith("D2L_"))) vi.stubEnv(key, undefined);
     fake.store = null;
     fake.password.mockResolvedValue("native-password");
+    fake.totp.mockResolvedValue(null);
     fake.migrate.mockResolvedValue({ tokenState: "absent", browserState: "encrypted" });
   });
   afterEach(() => vi.unstubAllEnvs());
@@ -46,6 +48,17 @@ describe("resolved authentication configuration", () => {
   it("uses the setup MFA preference when no environment override is present", async () => {
     fake.store = { baseUrl: "https://school.example", username: "alice", headless: false };
     expect(await loadConfig()).toMatchObject({ headless: false });
+  });
+
+  it("loads only Purdue's saved authenticator enrollment for the configured account", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    fake.store = { baseUrl: "https://purdue.brightspace.com", username: "alice" };
+    fake.totp.mockResolvedValue(uri);
+    expect(await loadConfig()).toMatchObject({ totpUri: uri });
+    expect(fake.totp).toHaveBeenCalledWith("https://purdue.brightspace.com", "alice");
+    fake.store = { baseUrl: "https://other.example", username: "alice" };
+    expect(await loadConfig()).toMatchObject({ totpUri: undefined });
+    expect(fake.totp).toHaveBeenCalledTimes(1);
   });
 
   it("rejects credential-bearing URLs before accessing native storage", async () => {

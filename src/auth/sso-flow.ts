@@ -61,6 +61,7 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
   const credentials = {
     username: config.username,
     password: config.password,
+    totpUri: new URL(config.baseUrl).hostname === "purdue.brightspace.com" ? config.totpUri : undefined,
     baseUrl: config.baseUrl,
     headless: config.headless,
     requestMfaCode,

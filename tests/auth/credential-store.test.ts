@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { assertNativeCredentialStoreAvailable, getSessionEncryptionKey, getStoredPassword, hasSessionEncryptionKey, setStoredPassword, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
+import { assertNativeCredentialStoreAvailable, getSessionEncryptionKey, getStoredPassword, getStoredTotpUri, hasSessionEncryptionKey, setStoredPassword, setStoredTotpUri, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
 import { MemoryCredentialBackend } from "./secure-store-fixtures.js";
 
 describe("Credential store", () => {
@@ -30,6 +30,16 @@ describe("Credential store", () => {
     expect(await getStoredPassword("https://school.example/d2l/home", "alice", backend)).toBe("dummy-password");
     expect(await getStoredPassword("https://other.example/", "alice", backend)).toBeNull();
     expect(await getStoredPassword("https://school.example/", "bob", backend)).toBeNull();
+  });
+
+  it("keeps authenticator enrollment separate from passwords and other accounts", async () => {
+    const backend = new MemoryCredentialBackend();
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    await setStoredTotpUri("https://purdue.brightspace.com/", "Alice", uri, backend);
+    expect(await getStoredTotpUri("https://purdue.brightspace.com", "alice", backend)).toBe(uri);
+    expect(await getStoredPassword("https://purdue.brightspace.com", "Alice", backend)).toBeNull();
+    expect(await getStoredTotpUri("https://other.example", "Alice", backend)).toBeNull();
+    expect(await getStoredTotpUri("https://purdue.brightspace.com", "bob", backend)).toBeNull();
   });
 
   it("fails verification when the native store does not retain a password", async () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
 import { MfaApprovalError, UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
 import { AUTH_COMMAND } from "../../src/utils/commands.js";
+import { generateTotp } from "../../src/auth/totp.js";
 
 const BASE_URL = "https://purdue.brightspace.com";
 const SIGN_SELECTOR = "#idRichContext_DisplaySign";
@@ -9,6 +10,9 @@ const SIGN_SELECTOR = "#idRichContext_DisplaySign";
 interface PollState {
   number?: string;
   code?: boolean;
+  codeMethod?: boolean;
+  otherMethod?: boolean;
+  account?: string;
   challenge?: boolean;
   kmsi?: boolean;
   /**
@@ -49,7 +53,8 @@ function makeMfaPage(states: PollState[]) {
       if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
       return false;
     },
-    textContent: async () => selector === SIGN_SELECTOR ? current().number ?? null : null,
+    textContent: async () => selector === SIGN_SELECTOR ? current().number ?? null
+      : selector === "#displayName" ? current().account ?? null : null,
     click: yes,
     fill,
     press,
@@ -63,6 +68,10 @@ function makeMfaPage(states: PollState[]) {
       isVisible: async () =>
         /stay signed in/i.test(String(pattern))
           ? Boolean(current().kmsi)
+          : /use a verification code/i.test(String(pattern))
+            ? Boolean(current().codeMethod)
+            : /sign in another way/i.test(String(pattern))
+              ? Boolean(current().otherMethod)
           : /do you trust/i.test(String(pattern))
             ? Boolean(current().trust)
             : false,
@@ -72,6 +81,7 @@ function makeMfaPage(states: PollState[]) {
         const domain = trust === true ? "purdue.edu" : trust;
         return `Do you trust ${domain}?\nWorking anonymously? Continue only if you trust it.`;
       },
+      click: continueClick,
     }) })),
     // Only the controls the MFA loop legitimately looks for are reported
     // visible, so an unmodelled button is never clicked by accident.
@@ -194,6 +204,39 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(requestMfaCode).toHaveBeenCalledOnce();
     expect(fill).toHaveBeenCalledWith("123456");
     expect(yes).toHaveBeenCalledOnce();
+  });
+
+  it("selects Microsoft's code method and answers it from the saved enrollment", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill, continueClick } = makeMfaPage([
+      { codeMethod: true },
+      { code: true, account: "alice@purdue.edu" },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await (new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri }) as any).handleMFA(page);
+    expect(continueClick).toHaveBeenCalledOnce();
+    expect(fill).toHaveBeenCalledWith(generateTotp(uri, Date.now() - 2000));
+  });
+
+  it("opens alternate sign-in methods before choosing verification code", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill, continueClick } = makeMfaPage([
+      { otherMethod: true },
+      { codeMethod: true },
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await (new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri }) as any).handleMFA(page);
+    expect(continueClick).toHaveBeenCalledTimes(2);
+    expect(fill).toHaveBeenCalledOnce();
+  });
+
+  it("does not submit a code when Microsoft shows another account", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill } = makeMfaPage([{ code: true, account: "other@purdue.edu" }]);
+    await expect((new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri }) as any).handleMFA(page))
+      .rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+    expect(fill).not.toHaveBeenCalled();
   });
 
   it("directs non-interactive authentication to the CLI when a code is required", async () => {

@@ -161,6 +161,23 @@ function passwordAccount(baseUrl: string, username: string): string {
   return `password:${createHash("sha256").update(identity).digest("hex")}`;
 }
 
+function totpAccount(baseUrl: string, username: string): string {
+  const identity = JSON.stringify([new URL(baseUrl).origin, username.toLowerCase()]);
+  return `totp:${createHash("sha256").update(identity).digest("hex")}`;
+}
+
+export async function getStoredTotpUri(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<string | null> {
+  return backend.getPassword(SERVICE, totpAccount(baseUrl, username));
+}
+
+export async function setStoredTotpUri(baseUrl: string, username: string, uri: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
+  const account = totpAccount(baseUrl, username);
+  await backend.setPassword(SERVICE, account, uri);
+  if (await backend.getPassword(SERVICE, account) !== uri) {
+    throw new NativeCredentialStoreError("The authenticator enrollment could not be verified in the native credential store. Existing configuration was preserved.");
+  }
+}
+
 export async function getStoredPassword(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<string | null> {
   return backend.getPassword(SERVICE, passwordAccount(baseUrl, username));
 }

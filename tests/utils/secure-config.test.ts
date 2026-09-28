@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
-  get: vi.fn(), set: vi.fn(), save: vi.fn(), load: vi.fn(), exists: vi.fn(),
+  get: vi.fn(), set: vi.fn(), getTotp: vi.fn(), setTotp: vi.fn(), save: vi.fn(), load: vi.fn(), exists: vi.fn(),
   acquire: vi.fn(), release: vi.fn(), locked: false,
   current: null as Record<string, unknown> | null,
 }));
 vi.mock("../../src/auth/credential-store.js", () => ({
   getStoredPassword: fake.get,
   setStoredPassword: fake.set,
+  getStoredTotpUri: fake.getTotp,
+  setStoredTotpUri: fake.setTotp,
 }));
 vi.mock("../../src/utils/config-store.js", () => ({
   saveConfigStore: fake.save, loadConfigStore: fake.load, configStoreExists: fake.exists,
@@ -40,6 +42,24 @@ describe("secure configuration", () => {
     expect(fake.set).toHaveBeenCalledWith("https://school.example", "alice", "secret");
     expect(fake.save).toHaveBeenCalledWith({ baseUrl: "https://school.example", username: "alice", campus: "Poly" });
     expect(fake.set.mock.invocationCallOrder[0]).toBeLessThan(fake.save.mock.invocationCallOrder[0]);
+  });
+
+  it("saves Purdue enrollment only in the native store", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    fake.getTotp.mockResolvedValue(uri);
+    await saveSecureConfig({ baseUrl: "https://purdue.brightspace.com", username: "alice", totpUri: uri });
+    expect(fake.setTotp).toHaveBeenCalledWith("https://purdue.brightspace.com", "alice", uri);
+    expect(fake.save).toHaveBeenCalledWith({ baseUrl: "https://purdue.brightspace.com", username: "alice" });
+  });
+
+  it("rejects an invalid code or another school before writing credentials", async () => {
+    await expect(saveSecureConfig({ baseUrl: "https://purdue.brightspace.com", username: "alice", password: "new", totpUri: "123456" }))
+      .rejects.toThrow("Invalid authenticator enrollment URI");
+    await expect(saveSecureConfig({ baseUrl: "https://other.example", username: "alice", totpUri: "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" }))
+      .rejects.toThrow("Purdue school URL");
+    expect(fake.set).not.toHaveBeenCalled();
+    expect(fake.setTotp).not.toHaveBeenCalled();
+    expect(fake.save).not.toHaveBeenCalled();
   });
 
   it("preserves the old config if native storage fails", async () => {
