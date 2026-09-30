@@ -75,12 +75,23 @@ describe("shouldReexec", () => {
 });
 
 describe("reexecLatestIfStale", () => {
+  it("keeps automatic authentication on the MCP sibling version without contacting npm", async () => {
+    const fetchImpl = vi.fn(async () => okJson("99.0.0"));
+    const spawnImpl = vi.fn();
+    expect(await reexecLatestIfStale({
+      env: {}, argv: ["node", "auth-cli.js", "--automatic"],
+      installedVersion: "3.7.2", runningFromNpxCache: false,
+      fetchImpl: fetchImpl as unknown as typeof fetch, spawnImpl: spawnImpl as never,
+    })).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
   it("runs the pinned latest command and returns the child's exit code", async () => {
     const spawnImpl = vi.fn(() => fakeChild(0)) as never;
 
     const code = await reexecLatestIfStale({
       env: {},
-      argv: ["node", "auth-cli.js", "--automatic"],
+      argv: ["node", "auth-cli.js"],
       installedVersion: "1.2.6",
       fetchImpl: vi.fn(async () => okJson("2.0.0")) as unknown as typeof fetch,
       runningFromNpxCache: false,
@@ -92,7 +103,7 @@ describe("reexecLatestIfStale", () => {
     const [command, args, options] = (spawnImpl as unknown as { mock: { calls: unknown[][] } })
       .mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
     expect(command).toBe("npx");
-    expect(args).toEqual(["-y", "brightspace-mcp-server@latest", "auth", "--automatic"]);
+    expect(args).toEqual(["-y", "brightspace-mcp-server@latest", "auth"]);
     expect(options.env[REEXEC_SENTINEL]).toBe("1");
   });
 

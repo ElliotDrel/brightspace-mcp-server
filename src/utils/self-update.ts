@@ -93,7 +93,9 @@ export async function reexecLatestIfStale(deps: ReexecDeps = {}): Promise<number
 
   // Cheap local checks first, so an opted-out or npx-launched run never even
   // touches the network.
-  if (env[REEXEC_SENTINEL] || env.D2L_NO_UPDATE_CHECK || runningFromNpxCache) return null;
+  // The MCP deliberately launches its sibling auth CLI. Replacing that child
+  // with npm's latest can lose fork features and put installs before sign-in.
+  if (argv.includes("--automatic") || env[REEXEC_SENTINEL] || env.D2L_NO_UPDATE_CHECK || runningFromNpxCache) return null;
 
   const latest = await fetchLatestVersion(fetchImpl);
   if (!shouldReexec({ env, latest, installedVersion, runningFromNpxCache })) return null;

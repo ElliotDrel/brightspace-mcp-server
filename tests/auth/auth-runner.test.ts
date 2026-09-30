@@ -26,12 +26,14 @@ describe("AuthRunner", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
   it("runs automatic authentication and forwards complete MFA lines", async () => {
+    vi.stubEnv("D2L_HEADLESS", undefined);
     const progress = vi.fn();
     const runner = new AuthRunner({ onProgress: progress });
     const result = runner.run();
@@ -42,8 +44,18 @@ describe("AuthRunner", () => {
     expect(await result).toBe(true);
     expect(spawn).toHaveBeenCalledWith(process.execPath,
       [expect.stringContaining("auth-cli.js"), "--automatic"],
-      expect.objectContaining({ cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] }));
+      expect.objectContaining({ cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true, env: expect.objectContaining({ D2L_HEADLESS: "true" }) }));
     expect(progress.mock.calls).toEqual([["MFA number: 42"], ["Waiting for approval"]]);
+  });
+
+  it("honors an explicit visible-browser override", async () => {
+    vi.stubEnv("D2L_HEADLESS", "false");
+    const result = new AuthRunner().run();
+    child.emit("close", 0);
+    expect(await result).toBe(true);
+    expect(spawn).toHaveBeenCalledWith(process.execPath, expect.any(Array),
+      expect.objectContaining({ env: expect.objectContaining({ D2L_HEADLESS: "false" }) }));
   });
 
   it("joins the login already in flight instead of spawning a second child", async () => {

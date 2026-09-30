@@ -266,7 +266,10 @@ export class AuthRunner {
         [this.scriptPath, "--automatic"],
         {
           cwd: process.cwd(),
-          env: { ...process.env },
+          // Automatic recovery stays invisible unless explicitly overridden.
+          // Manual auth still honors the visible-browser preference in setup.
+          env: { ...process.env, D2L_HEADLESS: process.env.D2L_HEADLESS ?? "true" },
+          windowsHide: true,
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
         },
