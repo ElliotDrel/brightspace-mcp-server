@@ -91,9 +91,9 @@ Claude Desktop uses a separate configuration, which the setup wizard can update 
 
 There is nothing to log into first. Ask for your grades and the sign-in happens as part of that request, so the assistant never has to check whether you are authenticated before it can answer. Starting your AI client touches Brightspace not at all: a restart on its own will never set off an MFA prompt.
 
-Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
+Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a headless browser restores your saved Microsoft session and tries silent SSO. Automatic recovery stays on the server's own auth version and does not install a different release before login. Set `D2L_HEADLESS=false` explicitly in the MCP environment to open a browser during automatic recovery. When an automatic run needs a code and no saved enrollment is available, run the auth command below to enter it securely in the terminal.
 
-If visible-browser mode is configured, the window stays open for up to five minutes so you can finish credentials and MFA manually when automatic sign-in cannot continue. Rerunning setup preserves your previous hidden or visible choice as the prompt default.
+Manual authentication honors the hidden or visible mode chosen in setup. In visible mode, the window stays open for up to five minutes so you can finish credentials and MFA manually. Rerunning setup preserves your previous hidden or visible choice as the prompt default. Microsoft's passwordless screen is switched to its password option when a saved password is configured, allowing automated sign-in and subsequent MFA to continue.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
 

@@ -94,6 +94,38 @@ const enterCredentials = (flow: PurdueSSOFlow, page: unknown): Promise<void> =>
   (flow as any).enterCredentials(page);
 
 describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", () => {
+  it("selects the password option on Microsoft's passwordless screen", async () => {
+    const click = vi.fn();
+    const page = {
+      url: () => "https://login.microsoftonline.com/common/login",
+      locator: () => ({ first: () => ({ isVisible: async () => false }) }),
+      getByText: vi.fn(() => ({ first: () => ({ isVisible: async () => true, click }) })),
+    };
+    await new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }).prepareLogin(page as never);
+    expect(page.getByText).toHaveBeenCalledWith(/^(?:use (?:your|a) password(?: instead)?|sign in with (?:your|a) password)$/i);
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it("does not select a password option on another origin or without a password", async () => {
+    const getByText = vi.fn();
+    await new PurdueSSOFlow({ password: PASSWORD }).prepareLogin({
+      url: () => "https://other.example/login", getByText,
+    } as never);
+    await new PurdueSSOFlow({}).prepareLogin({
+      url: () => "https://login.microsoftonline.com/common/login", getByText,
+    } as never);
+    expect(getByText).not.toHaveBeenCalled();
+  });
+
+  it.each(["input[type=password]", "#idTxtBx_SAOTCC_OTC"])("keeps an already open %s form", async selector => {
+    const getByText = vi.fn();
+    const page = {
+      url: () => "https://login.microsoftonline.com/common/login", getByText,
+      locator: (candidate: string) => ({ first: () => ({ isVisible: async () => candidate === selector }) }),
+    };
+    await new PurdueSSOFlow({ password: PASSWORD }).prepareLogin(page as never);
+    expect(getByText).not.toHaveBeenCalled();
+  });
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 

@@ -45,6 +45,7 @@ function makeMfaPage(states: PollState[]) {
   const continueClick = vi.fn(async () => {});
   const current = () => states[Math.min(poll, states.length - 1)] ?? {};
   const locatorTarget = (selector: string) => ({
+    count: async () => selector === "#displayName" && current().account ? 1 : 0,
     isVisible: async () => {
       if (selector === SIGN_SELECTOR) return current().number !== undefined;
       if (selector === "#idTxtBx_SAOTCC_OTC" || selector === 'input[name="otc"]') return Boolean(current().code);
@@ -53,8 +54,14 @@ function makeMfaPage(states: PollState[]) {
       if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
       return false;
     },
-    textContent: async () => selector === SIGN_SELECTOR ? current().number ?? null
-      : selector === "#displayName" ? current().account ?? null : null,
+    textContent: async () => {
+      if (["#displayName", "#signInName", "#userDisplayName"].includes(selector) &&
+          !(selector === "#displayName" && current().account)) {
+        throw new Error("Optional account labels must not be awaited when absent");
+      }
+      return selector === SIGN_SELECTOR ? current().number ?? null
+        : selector === "#displayName" ? current().account ?? null : null;
+    },
     click: yes,
     fill,
     press,

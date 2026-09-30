@@ -83,6 +83,16 @@ export class PurdueSSOFlow {
 
   async prepareLogin(page: Page): Promise<void> {
     await this.handleCampusSelector(page);
+    // Microsoft may choose passwordless phone approval immediately after the
+    // account hint. Prefer the saved password so code-based MFA can follow.
+    if (new URL(page.url()).hostname === "login.microsoftonline.com" && this.config.password) {
+      if (await this.anyVisible(page, PASSWORD_SELECTORS) || await this.firstVisible(page, MFA_CODE_SELECTORS)) return;
+      const password = page.getByText(/^(?:use (?:your|a) password(?: instead)?|sign in with (?:your|a) password)$/i).first();
+      if (await password.isVisible().catch(() => false)) {
+        await password.click();
+        log("INFO", "Selected saved-password sign-in instead of passwordless phone approval");
+      }
+    }
   }
 
   /** First half of Brightspace Bar's choreography, with no password access. */
@@ -375,7 +385,11 @@ export class PurdueSSOFlow {
     }
     const expected = signInName(this.config.username, this.config.baseUrl).toLowerCase();
     for (const selector of ["#displayName", "#signInName", "#userDisplayName"]) {
-      const value = await page.locator(selector).first().textContent().catch(() => null);
+      const account = page.locator(selector).first();
+      // These are alternative layouts, not required controls. textContent()
+      // auto-waits for a missing element for 30 seconds on every MFA poll.
+      if (await account.count() === 0) continue;
+      const value = await account.textContent({ timeout: 1000 }).catch(() => null);
       const shown = value?.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0]?.toLowerCase();
       if (shown && shown !== expected) {
         throw new UnsupportedAuthenticationError("Microsoft is showing another account. Automatic Purdue code entry stopped.");
