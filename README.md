@@ -97,6 +97,8 @@ Manual authentication honors the hidden or visible mode chosen in setup. In visi
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
 
+Automatic code entry does not guarantee that no phone notification is sent. Microsoft can choose phone approval before the browser reaches the controls used to switch methods. A code preference may help when the account allows it, but [system-preferred authentication](https://learn.microsoft.com/en-us/entra/identity/authentication/concept-system-preferred-authentication) can override user preferences. Switching the rendered page cannot retract an already sent notification. Keep saved sessions to avoid unnecessary sign-ins; a fresh login still depends on the school's authentication policy.
+
 If you miss an MFA request, automatic browser authentication pauses for five minutes before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately, see a number match, or enter an authenticator code:
 
 ```bash
