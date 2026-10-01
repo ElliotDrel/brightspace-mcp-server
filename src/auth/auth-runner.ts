@@ -8,6 +8,7 @@ import { spawn, execFileSync } from "node:child_process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
+import { authDiagnostic } from "./auth-diagnostics.js";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
@@ -258,6 +259,7 @@ export class AuthRunner {
    * child's real completion is tracked separately on this.childDone.
    */
   private async spawnAuth(): Promise<boolean> {
+    const startedAt = Date.now();
     log("INFO", "Auto-launching brightspace-auth...");
 
     return await new Promise<boolean>((resolve, reject) => {
@@ -275,6 +277,7 @@ export class AuthRunner {
         },
       );
 
+      authDiagnostic("recovery_started", { childPid: child.pid });
       let timedOut = false;
       // Whether the caller-facing promise above (resolve/reject) has
       // settled. Distinct from childFinished: an early MFA answer settles
@@ -349,7 +352,10 @@ export class AuthRunner {
         if (firstChallenge || matched) {
           this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
-        if (firstChallenge) resolveChallengeSignal();
+        if (firstChallenge) {
+          authDiagnostic("recovery_pending", { childPid: child.pid, elapsedMs: Date.now() - startedAt });
+          resolveChallengeSignal();
+        }
         if (!callerSettled) {
           settleCaller(new AuthProcessError(...mfaPendingFailure(this.pendingChallenge?.numberMatch), this.pendingChallenge?.numberMatch));
         }
@@ -361,6 +367,8 @@ export class AuthRunner {
       const finishChild = (error?: AuthProcessError) => {
         if (childFinished) return;
         childFinished = true;
+        authDiagnostic("recovery_finished", { childPid: child.pid, result: error ? "failed" : "success", reason: error?.kind,
+          elapsedMs: Date.now() - startedAt });
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         process.off("exit", onExit);

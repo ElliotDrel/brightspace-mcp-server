@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Brightspace MCP Server. Copyright (c) 2026 Rohan Muppa. MIT licensed. */
 
+import { flushAuthDiagnostics } from "./auth/auth-diagnostics.js";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +101,7 @@ async function main(): Promise<void> {
     console.error(`Run \`${SETUP_COMMAND}\` to update saved credentials.`);
     console.error(`Run \`${AUTH_COMMAND}\` to retry explicitly. This bypasses the automatic MFA cooldown.`);
   } finally {
+    await flushAuthDiagnostics();
     // The failure path is exactly where knowing you are out of date matters
     // most, so print these either way.
     await updateCheck;

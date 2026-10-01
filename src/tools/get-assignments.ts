@@ -4,6 +4,9 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import { AuthError } from "../utils/errors.js";
+import { ApiError } from "../api/errors.js";
+import { authDiagnostic } from "../auth/auth-diagnostics.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllItems } from "../api/paginate.js";
@@ -14,6 +17,11 @@ import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { assignmentUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
+
+/** Optional permission failures may degrade a listing; authentication failures may not. */
+function rethrowAuthenticationFailure(error: unknown): void {
+  if (error instanceof AuthError && (!(error instanceof ApiError) || error.status === 401)) throw error;
+}
 
 // D2L Dropbox API types
 interface DropboxFolder {
@@ -216,6 +224,7 @@ async function recoverContentQuizzes(
         ttl: DEFAULT_CACHE_TTLS.assignments,
       });
     } catch (error) {
+      rethrowAuthenticationFailure(error);
       log("DEBUG", `Failed to fetch content-linked quiz ${quizId}: using content metadata`, error);
     }
 
@@ -226,6 +235,7 @@ async function recoverContentQuizzes(
         { ttl: DEFAULT_CACHE_TTLS.courseContent }
       );
     } catch (error) {
+      rethrowAuthenticationFailure(error);
       log("DEBUG", `Failed to fetch content topic ${topic.TopicId}: using table-of-contents metadata`, error);
     }
 
@@ -276,6 +286,17 @@ export async function fetchCourseAssignments(
     }),
   ]);
 
+  const sources = ["dropbox", "quizzes", "gradebook", "content"] as const;
+  [dropboxResult, quizResult, gradebookResult, contentResult].forEach((result, index) => {
+    if (result.status === "rejected") {
+      authDiagnostic("assignment_source_failed", {
+        source: sources[index],
+        status: result.reason instanceof ApiError ? result.reason.status : undefined,
+      });
+      rethrowAuthenticationFailure(result.reason);
+    }
+  });
+
   // Process Dropbox folders
   if (dropboxResult.status === "fulfilled") {
     // D2L dropbox endpoint may return paged { Objects: [...] } or flat array
@@ -295,6 +316,7 @@ export async function fetchCourseAssignments(
         );
         submissions = Array.isArray(submissionsRaw) ? submissionsRaw : (submissionsRaw as any).Objects ?? [];
       } catch (error: any) {
+        rethrowAuthenticationFailure(error);
         // 404 means no submissions yet - that's fine
         if (error?.status !== 404) {
           log("DEBUG", `Failed to fetch submissions for folder ${folder.Id}`, error);
@@ -309,6 +331,7 @@ export async function fetchCourseAssignments(
           { ttl: DEFAULT_CACHE_TTLS.assignments }
         );
       } catch (error: any) {
+        rethrowAuthenticationFailure(error);
         // 404/403 means no feedback available (or no access) - that's fine
         if (error?.status !== 404 && error?.status !== 403) {
           log("DEBUG", `Failed to fetch feedback for folder ${folder.Id}`, error);
@@ -412,6 +435,7 @@ export async function fetchCourseAssignments(
           // D2L attempts endpoint may return paged { Objects: [...] } or flat array
           attempts = Array.isArray(attemptsRaw) ? attemptsRaw : (attemptsRaw as any).Objects ?? [];
         } catch (error: any) {
+          rethrowAuthenticationFailure(error);
           if (error?.status === 404) {
             // 404 means no attempts yet, which is a measurement of zero
             attempts = [];
@@ -609,6 +633,7 @@ export function registerGetAssignments(
               assignments,
             };
           } catch (error: any) {
+          rethrowAuthenticationFailure(error);
             // 403 means no access (past course, etc) - log and skip
             if (error?.status === 403) {
               log(
@@ -622,6 +647,9 @@ export function registerGetAssignments(
         });
 
         const results = await Promise.allSettled(assignmentPromises);
+        results.forEach(result => {
+          if (result.status === "rejected") rethrowAuthenticationFailure(result.reason);
+        });
         const courses = results
           .filter(
             (r): r is PromiseFulfilledResult<any> =>

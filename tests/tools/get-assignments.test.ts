@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { TokenRefreshError } from "../../src/api/errors.js";
 import { fetchCourseAssignments } from "../../src/tools/get-assignments.js";
 
 /**
@@ -29,6 +31,35 @@ function makeApiClient() {
 }
 
 describe("fetchCourseAssignments", () => {
+  it("propagates pending authentication instead of returning an empty assignment list", async () => {
+    const error = new AuthProcessError("mfaPending", "Sign-in is still running");
+    const apiClient = makeApiClient();
+    apiClient.get.mockRejectedValue(error);
+    await expect(fetchCourseAssignments(apiClient as any, COURSE_ID)).rejects.toBe(error);
+  });
+
+  it("preserves token refresh failures even when another assignment source succeeds", async () => {
+    const error = new TokenRefreshError("Temporary outage");
+    const apiClient = makeApiClient();
+    const get = apiClient.get.getMockImplementation()!;
+    apiClient.get.mockImplementation(async path => {
+      if (path.endsWith("/grades/")) throw error;
+      return get(path);
+    });
+    await expect(fetchCourseAssignments(apiClient as any, COURSE_ID)).rejects.toBe(error);
+  });
+
+  it("propagates authentication failures during optional submission retrieval", async () => {
+    const error = new AuthProcessError("mfaPending", "Sign-in is still running");
+    const apiClient = makeApiClient();
+    const get = apiClient.get.getMockImplementation()!;
+    apiClient.get.mockImplementation(async path => {
+      if (path.includes("/submissions/")) throw error;
+      return get(path);
+    });
+    await expect(fetchCourseAssignments(apiClient as any, COURSE_ID)).rejects.toBe(error);
+  });
+
   it("adds deep-link urls when baseUrl is supplied", async () => {
     const assignments = await fetchCourseAssignments(
       makeApiClient() as any,

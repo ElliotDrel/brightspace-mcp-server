@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { readFileSync, accessSync } from "node:fs";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
+import { authDiagnostic } from "./auth-diagnostics.js";
 import { log } from "../utils/logger.js";
 import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
@@ -87,6 +88,9 @@ export class BrowserAuth {
   }
 
   async authenticate(options: AuthenticateOptions = {}): Promise<TokenData> {
+    const startedAt = Date.now();
+    authDiagnostic("browser_started", { automatic: Boolean(options.automatic), headless: this.config.headless,
+      codeConfigured: Boolean(this.config.totpUri) });
     const release = await acquireProcessLock(path.join(this.config.sessionDir, ".auth.lock"));
     try {
       // Even a cookie-only SAML redirect can issue an MFA push. Suppress all
@@ -96,7 +100,15 @@ export class BrowserAuth {
       const token = await this.attemptAuthentication();
       await options.onAuthenticated?.(token);
       await this.cooldown.clear();
+      authDiagnostic("browser_finished", { result: "success", elapsedMs: Date.now() - startedAt });
       return token;
+    } catch (error) {
+      authDiagnostic("browser_finished", { result: "failed",
+        reason: error instanceof MfaApprovalError ? "mfaPending"
+          : error instanceof UnsupportedAuthenticationError ? "unsupported"
+          : error instanceof BrowserAuthTransportError ? "transport" : "failed",
+        elapsedMs: Date.now() - startedAt });
+      throw error;
     } finally {
       await release();
     }
@@ -113,13 +125,19 @@ export class BrowserAuth {
       void browser?.close().catch(() => {});
     };
     try {
+      const stageStartedAt = Date.now();
       const state = await this.stateStore.load();
+      authDiagnostic("browser_state_loaded", { restoredState: Boolean(state), elapsedMs: Date.now() - stageStartedAt });
+      const importStartedAt = Date.now();
       const { chromium } = await import("playwright");
+      authDiagnostic("playwright_loaded", { elapsedMs: Date.now() - importStartedAt });
       const args = ["--disable-blink-features=AutomationControlled"];
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
       // Use Playwright's own timeout, which cleans up an unsuccessful launch.
       try {
+        const launchStartedAt = Date.now();
         browser = await chromium.launch({ headless: this.config.headless, timeout: 60000, args });
+        authDiagnostic("browser_launched", { elapsedMs: Date.now() - launchStartedAt });
       } catch (launchError) {
         // Keep the remedy attached to the failure. Without this the hint is
         // lost when the auth runner flattens errors into "Authentication failed".
@@ -132,6 +150,35 @@ export class BrowserAuth {
       process.once("SIGTERM", closeOnSignal);
       context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: state });
       page = await context.newPage();
+      if (process.env.D2L_DIAGNOSTICS_DIR) {
+        let lastStage = "";
+        page.on("framenavigated", frame => {
+          if (frame !== page?.mainFrame()) return;
+          try {
+            const url = new URL(frame.url());
+            const stage = url.origin === new URL(this.config.baseUrl).origin ? "brightspace"
+              : url.hostname === "login.microsoftonline.com" ? "microsoft"
+              : url.hostname.endsWith(".purdue.edu") ? "purdue" : "other";
+            if (stage !== lastStage) authDiagnostic("page_stage", { stage });
+            lastStage = stage;
+          } catch { /* Blank pages have no login stage. */ }
+        });
+        page.on("request", request => {
+          const url = new URL(request.url());
+          if (url.hostname !== "login.microsoftonline.com" || !url.pathname.endsWith("/SAS/BeginAuth")) return;
+          const body = request.postData() ?? "";
+          const method = /PhoneAppNotification|PhoneAppSignIn|PhoneAppPasswordless/.test(body) ? "push"
+            : /PhoneAppOTP|SoftwareOath|TOTP/.test(body) ? "code" : "unknown";
+          // Inspect known method names only; never retain any request body.
+          authDiagnostic("microsoft_method_requested", { method });
+        });
+        page.on("response", response => {
+          const url = new URL(response.url());
+          if (url.hostname === "login.microsoftonline.com" && url.pathname.endsWith("/SAS/BeginAuth")) {
+            authDiagnostic("microsoft_response", { status: response.status() });
+          }
+        });
+      }
       let captured: string | undefined;
       listener = (request) => {
         const url = new URL(request.url());
@@ -141,6 +188,7 @@ export class BrowserAuth {
       };
       page.on("request", listener);
       await this.navigateAndLogin(page);
+      authDiagnostic("browser_verified");
       // Persist the verified browser state before token acquisition. Token
       // minting can fail independently, and a temporary outage must not throw
       // away newly renewed Entra or Brightspace cookies.

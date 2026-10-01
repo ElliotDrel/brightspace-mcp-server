@@ -238,6 +238,34 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(fill).toHaveBeenCalledOnce();
   });
 
+  it("keeps transient phone challenges inside automatic code recovery", async () => {
+    const onMfaChallenge = vi.fn();
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill } = makeMfaPage([
+      { number: "42", challenge: true },
+      { number: "42", challenge: true },
+      { otherMethod: true, number: "42", challenge: true },
+      { codeMethod: true },
+      { code: true, number: "42" },
+      { number: "42", challenge: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await (new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri, onMfaChallenge }) as any).handleMFA(page);
+    expect(fill).toHaveBeenCalledOnce();
+    expect(onMfaChallenge).not.toHaveBeenCalled();
+  });
+
+  it("still reports manual approval when code alternatives remain unavailable", async () => {
+    captureWarnings();
+    const onMfaChallenge = vi.fn();
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page } = makeMfaPage([{ number: "42", challenge: true }]);
+    await expect((new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri, onMfaChallenge }) as any).handleMFA(page))
+      .rejects.toBeInstanceOf(MfaApprovalError);
+    expect(onMfaChallenge).toHaveBeenCalledOnce();
+    expect(onMfaChallenge).toHaveBeenCalledWith("42");
+  });
+
   it("does not submit a code when Microsoft shows another account", async () => {
     const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
     const { page, fill } = makeMfaPage([{ code: true, account: "other@purdue.edu" }]);

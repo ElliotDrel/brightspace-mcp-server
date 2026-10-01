@@ -130,4 +130,30 @@ Run it from your home folder. On macOS, a terminal that lacks Files and Folders 
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, graded discussion topics (any topic with a due date), and course calendar events such as exams and labs |
 
 
+### Local forks and authentication diagnostics
+
+When launching a fork from its local checkout, set `D2L_NO_UPDATE_CHECK=1` in
+both clients' Brightspace MCP environment settings. This disables upstream npm
+notices and CLI self-update; update and rebuild the checkout deliberately.
+
+Set `D2L_DIAGNOSTICS_DIR` to a private local directory to retain authentication
+diagnostics even when a client discards stderr. Daily `auth-YYYY-MM-DD.jsonl`
+files record process IDs and correlation IDs, stage timings, restored-state and code-method
+availability, selected methods, Microsoft method-request categories and HTTP
+statuses, background recovery outcomes, and failed assignment sources. A phone
+method request does not establish that a notification was delivered. Request
+bodies, URLs, account names, passwords, MFA digits, cookies, and tokens are never
+written. Each day's file is capped at 5 MiB; existing files are preserved and
+logging failures do not interrupt sign-in. Remove the environment setting to
+stop recording.
+
+Saved authenticator-code automation gets 15 seconds after a phone challenge
+appears to find Microsoft's code alternative before requesting manual approval.
+Once a code is submitted, the tool waits for authentication to finish instead of
+reporting the transient number-match screen as a manual approval request. This
+changes when the client is asked to intervene; it does not prevent Microsoft
+from initiating a phone-method request. Assignment retrieval propagates
+pending authentication and token-renewal failures rather than returning an
+apparently successful empty list.
+
 Licensed under the MIT License.

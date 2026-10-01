@@ -11,6 +11,7 @@ import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js"
 import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { authDiagnostic } from "./auth-diagnostics.js";
 import { generateTotp, secondsUntilFreshCode } from "./totp.js";
 
 // Entra names its username field type=email/loginfmt; Shibboleth portals (USC's
@@ -36,6 +37,7 @@ const NUMBER_MATCH_POLL_MS = 2000;
 
 /** A person has to find their phone, unlock it, and read a prompt. */
 const MFA_TIMEOUT_MS = 5 * 60 * 1000;
+const AUTOMATIC_CODE_GRACE_MS = 15000;
 
 interface PurdueSSOConfig {
   username?: string;
@@ -45,12 +47,14 @@ interface PurdueSSOConfig {
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
   /**
-   * Fired once per login as soon as an MFA challenge is visible: with the
+   * Fired once per login when manual MFA is required: with the
    * number-match digits when one is already on screen, otherwise null. If a
    * number later appears after a null firing, this fires once more with it —
    * that is the only case it fires twice. Lets a caller (AuthRunner) answer
    * the user immediately instead of blocking for the whole 5-minute approval
-   * wait, even on tenants that never show a number.
+   * wait, even on tenants that never show a number. Saved code automation gets
+   * a brief grace period to select its method; a submitted code never asks
+   * the caller to approve the transient phone challenge.
    */
   onMfaChallenge?: (number: string | null) => void;
 }
@@ -276,7 +280,10 @@ export class PurdueSSOFlow {
     if (!this.config.baseUrl) {
       throw new UnsupportedAuthenticationError("A school URL is required to verify authentication.");
     }
-    const deadline = Date.now() + MFA_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + MFA_TIMEOUT_MS;
+    let challengeSince: number | undefined;
+    authDiagnostic("mfa_wait", { codeConfigured: Boolean(this.config.totpUri) });
     let challenged = false;
     let announced: string | null = null;
     /** True once onMfaChallenge has been told about this login, number or not. */
@@ -293,13 +300,21 @@ export class PurdueSSOFlow {
         const challengeVisible = number !== null ||
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false);
-        if (challengeVisible && !challenged) {
+        if (challengeVisible) challengeSince ??= Date.now();
+        else challengeSince = undefined;
+        // Entra can briefly show a phone challenge while code alternatives load.
+        // Do not tell the parent to return a manual-approval error during that
+        // transition, or while Microsoft validates an automatically submitted code.
+        const manualRequired = !this.config.totpUri || (!this.mfaCodeSubmitted &&
+          challengeSince !== undefined && Date.now() - challengeSince >= AUTOMATIC_CODE_GRACE_MS);
+        if (challengeVisible && !challenged && manualRequired) {
           challenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
+          authDiagnostic("mfa_manual_required", { elapsedMs: Date.now() - startedAt });
           this.config.onMfaChallenge?.(number);
           if (number) announcedToCaller = true;
         }
-        if (number && number !== announced) {
+        if (number && number !== announced && manualRequired) {
           announced = number;
           log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
           if (!announcedToCaller) {
@@ -357,6 +372,7 @@ export class PurdueSSOFlow {
     if (submit) await submit.click();
     else await input.press("Enter");
     log("INFO", "Authenticator code submitted");
+    authDiagnostic("mfa_code_submitted");
     return true;
   }
 
@@ -373,6 +389,7 @@ export class PurdueSSOFlow {
       if (!await control.isVisible().catch(() => false)) continue;
       this.methodClicked.add(step);
       await control.click();
+      authDiagnostic("mfa_method_selected", { method: step });
       return true;
     }
     return false;
