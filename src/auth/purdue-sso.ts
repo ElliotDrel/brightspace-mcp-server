@@ -7,7 +7,7 @@
 import type { Locator, Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
+import { MfaApprovalError, UnsupportedAuthenticationError, AutomaticCodeAuthenticationError } from "./sso-flow.js";
 import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
@@ -37,7 +37,7 @@ const NUMBER_MATCH_POLL_MS = 2000;
 
 /** A person has to find their phone, unlock it, and read a prompt. */
 const MFA_TIMEOUT_MS = 5 * 60 * 1000;
-const AUTOMATIC_CODE_GRACE_MS = 15000;
+const AUTOMATIC_PROGRESS_NOTICE_MS = 15000;
 
 interface PurdueSSOConfig {
   username?: string;
@@ -52,11 +52,11 @@ interface PurdueSSOConfig {
    * number later appears after a null firing, this fires once more with it —
    * that is the only case it fires twice. Lets a caller (AuthRunner) answer
    * the user immediately instead of blocking for the whole 5-minute approval
-   * wait, even on tenants that never show a number. Saved code automation gets
-   * a brief grace period to select its method; a submitted code never asks
-   * the caller to approve the transient phone challenge.
+   * wait, even on tenants that never show a number. Saved Microsoft code
+   * automation reports automatic progress separately instead of manual approval.
    */
   onMfaChallenge?: (number: string | null) => void;
+  onAutomaticPending?: () => void;
 }
 
 /** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
@@ -282,7 +282,8 @@ export class PurdueSSOFlow {
     }
     const startedAt = Date.now();
     const deadline = startedAt + MFA_TIMEOUT_MS;
-    let challengeSince: number | undefined;
+    let automaticAnnounced = false;
+    let duoChallengeObserved = false;
     authDiagnostic("mfa_wait", { codeConfigured: Boolean(this.config.totpUri) });
     let challenged = false;
     let announced: string | null = null;
@@ -290,23 +291,30 @@ export class PurdueSSOFlow {
     let announcedToCaller = false;
     try {
       while (Date.now() < deadline) {
-        if (await this.duoMfa.handle(page)) challenged = true;
+        // Work backward from the endpoint: a verified session wins over stale
+        // challenge controls, and an existing code form wins over method switching.
+        if (await this.isAuthenticated(page)) {
+          log("INFO", "Login successful - verified Brightspace home");
+          return;
+        }
+        if (await this.duoMfa.handle(page)) {
+          challenged = true;
+          duoChallengeObserved = true;
+        }
+        if (await this.submitMfaCode(page)) challenged = true;
         if (await this.selectCodeMethod(page)) {
           await page.waitForTimeout(500);
           continue;
         }
-        if (await this.submitMfaCode(page)) challenged = true;
         const number = await this.readNumberMatch(page);
         const challengeVisible = number !== null ||
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false);
-        if (challengeVisible) challengeSince ??= Date.now();
-        else challengeSince = undefined;
-        // Entra can briefly show a phone challenge while code alternatives load.
-        // Do not tell the parent to return a manual-approval error during that
-        // transition, or while Microsoft validates an automatically submitted code.
-        const manualRequired = !this.config.totpUri || (!this.mfaCodeSubmitted &&
-          challengeSince !== undefined && Date.now() - challengeSince >= AUTOMATIC_CODE_GRACE_MS);
+        // Time never determines whether a Microsoft phone approval is required.
+        // With a saved code, the state remains automatic until success or a
+        // typed failure. The interval below only bounds how long a caller waits
+        // before receiving an honest "still running" response.
+        const manualRequired = !this.config.totpUri;
         if (challengeVisible && !challenged && manualRequired) {
           challenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
@@ -322,9 +330,11 @@ export class PurdueSSOFlow {
             this.config.onMfaChallenge?.(number);
           }
         }
-        if (await this.isAuthenticated(page)) {
-          log("INFO", "Login successful - verified Brightspace home");
-          return;
+        if (this.config.totpUri && !duoChallengeObserved && !automaticAnnounced &&
+            Date.now() - startedAt >= AUTOMATIC_PROGRESS_NOTICE_MS) {
+          automaticAnnounced = true;
+          authDiagnostic("mfa_automatic_pending", { elapsedMs: Date.now() - startedAt });
+          this.config.onAutomaticPending?.();
         }
         await this.clickProvenKmsi(page);
         // The federated-domain trust prompt arrives after the IdP succeeds, so
@@ -334,8 +344,14 @@ export class PurdueSSOFlow {
       }
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
+      if (this.config.totpUri && !duoChallengeObserved) {
+        throw new AutomaticCodeAuthenticationError("Automatic code sign-in stopped before Brightspace was verified.", error as Error);
+      }
       if (challenged) throw new MfaApprovalError(error as Error, announced ?? undefined);
       throw new UnsupportedAuthenticationError("Automatic sign-in stopped before a supported MFA challenge completed.", error as Error);
+    }
+    if (this.config.totpUri && !duoChallengeObserved) {
+      throw new AutomaticCodeAuthenticationError("Automatic code sign-in did not reach a verified Brightspace session within 5 minutes.");
     }
     if (challenged) throw new MfaApprovalError(undefined, announced ?? undefined);
     throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");
@@ -356,7 +372,6 @@ export class PurdueSSOFlow {
         `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
       );
     }
-    this.mfaCodeSubmitted = true;
     let code: string;
     if (this.config.totpUri) {
       await this.assertExpectedMicrosoftAccount(page);
@@ -371,6 +386,7 @@ export class PurdueSSOFlow {
     const submit = await this.firstVisible(page, MFA_CODE_SUBMIT_SELECTORS);
     if (submit) await submit.click();
     else await input.press("Enter");
+    this.mfaCodeSubmitted = true;
     log("INFO", "Authenticator code submitted");
     authDiagnostic("mfa_code_submitted");
     return true;
@@ -378,7 +394,8 @@ export class PurdueSSOFlow {
 
   /** Select Microsoft's code method only when an account-scoped key exists. */
   private async selectCodeMethod(page: Page): Promise<boolean> {
-    if (!this.config.totpUri || new URL(page.url()).hostname !== "login.microsoftonline.com") return false;
+    if (!this.config.totpUri || this.mfaCodeSubmitted || new URL(page.url()).hostname !== "login.microsoftonline.com") return false;
+    if (await this.firstVisible(page, MFA_CODE_SELECTORS)) return false;
     await this.assertExpectedMicrosoftAccount(page);
     for (const [step, label] of [
       ["code", /^use a verification code$/i],

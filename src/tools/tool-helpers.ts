@@ -69,8 +69,8 @@ export function errorResponse(message: string): CallToolResult {
 const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   busy: "A sign-in is already running in another process. Let it finish, then try again.",
   cooldown:
-    "Automatic sign-in is paused because an MFA prompt went unanswered. " +
-    `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to retry now and see the number to enter.`,
+    "Automatic sign-in is paused after an unsuccessful attempt. " +
+    `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to retry now and inspect the sign-in flow.`,
   unsupported:
     "This login needs something your AI client cannot supply, usually a code from an "
     + "authenticator app. " +
@@ -87,6 +87,8 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   failed:
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
     "or `brightspace-setup` if your saved school or username is wrong.",
+  automaticPending:
+    "Automatic sign-in is still running in the background. Wait a few seconds, then call this tool again.",
   mfaPending:
     "Approve the sign-in request on your phone (Microsoft Authenticator or Duo), " +
     "then call this tool again — the sign-in is finishing in the background.",
@@ -144,6 +146,7 @@ export function sanitizeError(error: unknown): CallToolResult {
   // here rather than from a dedicated auth tool. Checked first: the kind
   // carries guidance that the generic branches below would throw away.
   if (error instanceof AuthProcessError) {
+    if (error.kind === "automaticPending") return errorResponse(authFailureMessage(error));
     return errorResponse(
       `Could not sign in to Brightspace automatically. ${authFailureMessage(error)}`
     );

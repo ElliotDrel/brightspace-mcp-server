@@ -63,7 +63,7 @@ describe("sanitizeError", () => {
   // error occurred", which is where all of these used to land.
   const expectedGuidance: Array<[AuthFailureKind, string]> = [
     ["busy", "already running in another process"],
-    ["cooldown", "MFA prompt went unanswered"],
+    ["cooldown", "after an unsuccessful attempt"],
     // Authenticator-code logins can be finished headlessly from a terminal, so
     // this must not claim a person has to sit at a browser.
     ["unsupported", "usually a code from an authenticator app"],
@@ -84,6 +84,13 @@ describe("sanitizeError", () => {
   // The digits are the whole point of this error, and they only ever reach
   // here via AuthProcessError.numberMatch (a stdout marker already validated
   // to \d{1,3} in auth-runner.ts) — never via the free-form message.
+  it("reports ongoing automation without claiming failure or requesting phone approval", () => {
+    const result = sanitizeError(new AuthProcessError("automaticPending", "internal detail"));
+    expect(textOf(result)).toContain("Automatic sign-in is still running");
+    expect(textOf(result)).toContain("call this tool again");
+    expect(textOf(result)).not.toMatch(/approve|phone|could not sign in|internal detail/i);
+  });
+
   it("surfaces the number-match digits for a pending MFA approval", () => {
     const result = sanitizeError(new AuthProcessError("mfaPending", "internal detail", "47"));
 

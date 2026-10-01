@@ -24,6 +24,9 @@ export class UnsupportedAuthenticationError extends BrowserAuthError {
   }
 }
 
+/** Automatic code failure is distinct from a pending phone approval. */
+export class AutomaticCodeAuthenticationError extends UnsupportedAuthenticationError {}
+
 export class MfaApprovalError extends BrowserAuthError {
   readonly code = "AUTH_MFA_FAILED";
   /**
@@ -57,7 +60,7 @@ export interface SSOFlow {
  * else uses the default flow, which already covers the common Shibboleth,
  * CAS, and Microsoft Entra forms.
  */
-export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode, onMfaChallenge?: OnMfaChallenge): SSOFlow {
+export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode, onMfaChallenge?: OnMfaChallenge, onAutomaticPending?: () => void): SSOFlow {
   const credentials = {
     username: config.username,
     password: config.password,
@@ -66,6 +69,7 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
     headless: config.headless,
     requestMfaCode,
     onMfaChallenge,
+    onAutomaticPending,
   };
 
   if (isSunyBrightspace(config.baseUrl)) {

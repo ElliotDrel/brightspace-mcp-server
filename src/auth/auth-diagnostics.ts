@@ -5,7 +5,7 @@ import { join } from "node:path";
 type Event = "recovery_started" | "recovery_pending" | "recovery_finished"
   | "browser_started" | "browser_state_loaded" | "playwright_loaded" | "browser_launched"
   | "page_stage" | "microsoft_method_requested" | "microsoft_response"
-  | "mfa_wait" | "mfa_method_selected" | "mfa_code_submitted" | "mfa_manual_required"
+  | "mfa_wait" | "mfa_automatic_pending" | "mfa_method_selected" | "mfa_code_submitted" | "mfa_manual_required"
   | "browser_verified" | "browser_finished" | "token_mint_started" | "token_mint_finished"
   | "assignment_source_failed";
 
@@ -20,7 +20,7 @@ interface Fields {
   stage?: "brightspace" | "microsoft" | "purdue" | "other";
   method?: "code" | "other" | "push" | "unknown";
   result?: "success" | "failed" | "sessionExpired" | "transport";
-  reason?: "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending";
+  reason?: "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending";
   source?: "dropbox" | "quizzes" | "gradebook" | "content";
 }
 
@@ -45,7 +45,7 @@ export function authDiagnostic(event: Event, fields: Fields = {}): void {
     stage: ["brightspace", "microsoft", "purdue", "other"],
     method: ["code", "other", "push", "unknown"],
     result: ["success", "failed", "sessionExpired", "transport"],
-    reason: ["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending"],
+    reason: ["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending", "automaticPending"],
     source: ["dropbox", "quizzes", "gradebook", "content"],
   };
   for (const key of ["stage", "method", "result", "reason", "source"] as const) {

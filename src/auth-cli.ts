@@ -70,7 +70,8 @@ async function main(): Promise<void> {
     const onMfaChallenge = automatic
       ? (number: string | null) => console.log(number ? `MFA_NUMBER:${number}` : "MFA_PENDING")
       : undefined;
-    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge }).authenticate({
+    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge,
+      onAutomaticPending: automatic ? () => console.log("AUTH_AUTOMATIC_PENDING") : undefined }).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);

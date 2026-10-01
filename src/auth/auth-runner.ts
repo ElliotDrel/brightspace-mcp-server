@@ -26,7 +26,7 @@ const KILL_GRACE_MS = 5000;
 
 /**
  * How long a caller that joins a background child already reported as
- * mfaPending waits for it before re-answering with the same challenge.
+ * pending waits for it before re-answering with the same challenge.
  * Long enough for an already-approved login to finish its next ~2s poll and
  * mint a token; short enough that a not-yet-approved one still answers
  * within this tool call instead of blocking for the rest of the 5-minute
@@ -35,7 +35,7 @@ const KILL_GRACE_MS = 5000;
 const JOIN_GRACE_MS = 5000;
 
 /**
- * The only two lines auth-cli.ts is allowed to hand back as structured data.
+ * The only three lines auth-cli.ts is allowed to hand back as structured data.
  * Deliberately strict (whole line, 1-3 digits or the literal word) so this
  * can never become a channel for arbitrary child-process text to reach a
  * tool response — anything that doesn't match exactly is just another log
@@ -43,6 +43,7 @@ const JOIN_GRACE_MS = 5000;
  */
 const MFA_NUMBER_MARKER = /^MFA_NUMBER:(\d{1,3})$/;
 const MFA_PENDING_MARKER = /^MFA_PENDING$/;
+const AUTOMATIC_PENDING_MARKER = /^AUTH_AUTOMATIC_PENDING$/;
 
 /** The mfaPending kind and message, with or without number-match digits. */
 function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, string] {
@@ -51,7 +52,15 @@ function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, s
     : ["mfaPending", "An MFA approval was not completed in time. Try again."];
 }
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending";
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending";
+
+type PendingState = { kind: "mfaPending" | "automaticPending"; numberMatch?: string };
+
+function pendingFailure(state: PendingState): [AuthFailureKind, string] {
+  return state.kind === "automaticPending"
+    ? ["automaticPending", "Automatic sign-in is still running in the background. Wait a few seconds, then try again."]
+    : mfaPendingFailure(state.numberMatch);
+}
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -130,8 +139,8 @@ function forwardLines(
  * The child inherits the parent's resolved environment and working directory,
  * so both processes read the same account configuration and .env file.
  *
- * run() settles as soon as the child reports an MFA challenge (with or
- * without a number to display) rather than waiting for the child to exit —
+ * run() settles when the child reports a manual MFA challenge or explicitly
+ * reports automatic sign-in still in progress, without waiting for child exit —
  * a tool call must not block for the whole approval window. The child keeps
  * running in the background; a later run() call joins that background child
  * instead of spawning a second one.
@@ -149,19 +158,19 @@ export class AuthRunner {
    */
   private inFlight: Promise<boolean> | null = null;
   /**
-   * The child from a login that answered its caller early (an MFA challenge
-   * was reported) and is still running in the background. Set for the
+   * The child from a login that answered its caller early (manual MFA or
+   * automatic progress was reported) and is still running in the background. Set for the
    * duration of every spawned child, not just the early-answer case, so a
    * caller who joins after the answer already exists resolves immediately.
    */
   private childDone: Promise<boolean> | null = null;
   /**
-   * The last MFA challenge the current background child reported, if any.
+   * The last pending state the current background child reported, if any.
    * Set the moment a marker settles a caller early, cleared alongside
    * childDone. Lets a later joiner re-answer immediately instead of
    * discovering the challenge is stale only after blocking on childDone.
    */
-  private pendingChallenge: { numberMatch?: string } | null = null;
+  private pendingChallenge: PendingState | null = null;
   /** Resolves on the next marker from the current child; null between children. */
   private challengeSignal: Promise<void> | null = null;
   private readonly scriptPath: string;
@@ -187,7 +196,7 @@ export class AuthRunner {
     }
 
     // A caller that answered early is gone, but its child can still be
-    // running in the background (waiting on the user's phone). Join it
+    // running in the background (waiting on MFA or automatic recovery). Join it
     // instead of spawning a second child, which would only hit the
     // cross-process lock and return "busy".
     if (this.childDone) {
@@ -233,7 +242,7 @@ export class AuthRunner {
       const graceTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new AuthProcessError(...mfaPendingFailure(challenge.numberMatch), challenge.numberMatch));
+        reject(new AuthProcessError(...pendingFailure(this.pendingChallenge ?? challenge), this.pendingChallenge?.numberMatch));
       }, JOIN_GRACE_MS);
       graceTimer.unref?.();
       childDone.then(
@@ -347,17 +356,20 @@ export class AuthRunner {
       // joinBackgroundChild. Idempotent on the "already known" question, but
       // a later number still overwrites a numberless pendingChallenge so a
       // fresh joiner sees it — see MFA_PENDING_MARKER's own comment.
-      const publishChallenge = (matched: string | undefined) => {
+      const publishPending = (kind: PendingState["kind"], matched?: string) => {
         const firstChallenge = this.pendingChallenge === null;
-        if (firstChallenge || matched) {
-          this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
+        // An explicit manual challenge supersedes automatic progress. Progress
+        // must never downgrade a real manual challenge or retain its digits.
+        if (kind === "mfaPending" || this.pendingChallenge?.kind !== "mfaPending") {
+          this.pendingChallenge = { kind, numberMatch: kind === "mfaPending"
+            ? matched ?? this.pendingChallenge?.numberMatch : undefined };
         }
         if (firstChallenge) {
-          authDiagnostic("recovery_pending", { childPid: child.pid, elapsedMs: Date.now() - startedAt });
+          authDiagnostic("recovery_pending", { childPid: child.pid, reason: kind, elapsedMs: Date.now() - startedAt });
           resolveChallengeSignal();
         }
         if (!callerSettled) {
-          settleCaller(new AuthProcessError(...mfaPendingFailure(this.pendingChallenge?.numberMatch), this.pendingChallenge?.numberMatch));
+          settleCaller(new AuthProcessError(...pendingFailure(this.pendingChallenge!), this.pendingChallenge?.numberMatch));
         }
       };
 
@@ -376,7 +388,7 @@ export class AuthRunner {
         settleCaller(error);
         if (answeredEarly) {
           if (error) log("WARN", `Background sign-in finished with ${error.kind}: ${error.message}`);
-          else log("INFO", "Background sign-in completed successfully after an early MFA response");
+          else log("INFO", "Background sign-in completed successfully after an early pending response");
         }
         if (error) rejectChildDone(error);
         else resolveChildDone(true);
@@ -402,9 +414,11 @@ export class AuthRunner {
         const numberMarker = MFA_NUMBER_MARKER.exec(line);
         if (numberMarker) {
           numberMatch = numberMarker[1];
-          publishChallenge(numberMatch);
+          publishPending("mfaPending", numberMatch);
         } else if (MFA_PENDING_MARKER.test(line)) {
-          publishChallenge(undefined);
+          publishPending("mfaPending");
+        } else if (AUTOMATIC_PENDING_MARKER.test(line)) {
+          publishPending("automaticPending");
         } else {
           log("DEBUG", line);
         }

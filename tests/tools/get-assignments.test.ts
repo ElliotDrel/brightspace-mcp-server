@@ -38,6 +38,13 @@ describe("fetchCourseAssignments", () => {
     await expect(fetchCourseAssignments(apiClient as any, COURSE_ID)).rejects.toBe(error);
   });
 
+  it("propagates automatic progress instead of returning an empty assignment list", async () => {
+    const error = new AuthProcessError("automaticPending", "Sign-in is still running");
+    const apiClient = makeApiClient();
+    apiClient.get.mockRejectedValue(error);
+    await expect(fetchCourseAssignments(apiClient as any, COURSE_ID)).rejects.toBe(error);
+  });
+
   it("preserves token refresh failures even when another assignment source succeeds", async () => {
     const error = new TokenRefreshError("Temporary outage");
     const apiClient = makeApiClient();

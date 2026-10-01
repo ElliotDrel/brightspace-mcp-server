@@ -147,13 +147,20 @@ written. Each day's file is capped at 5 MiB; existing files are preserved and
 logging failures do not interrupt sign-in. Remove the environment setting to
 stop recording.
 
-Saved authenticator-code automation gets 15 seconds after a phone challenge
-appears to find Microsoft's code alternative before requesting manual approval.
-Once a code is submitted, the tool waits for authentication to finish instead of
-reporting the transient number-match screen as a manual approval request. This
-changes when the client is asked to intervene; it does not prevent Microsoft
-from initiating a phone-method request. Assignment retrieval propagates
-pending authentication and token-renewal failures rather than returning an
-apparently successful empty list.
+The MFA loop checks for a verified session first, completes a visible code form
+before considering alternative methods, and avoids method switching after code
+submission. Saved-code recovery reports automatic progress separately from
+manual MFA. After 15 seconds it may return "automatic sign-in is still running";
+that interval controls responsiveness and never implies that phone approval is
+required. A subsequent tool call joins the same child. API requests resume only
+after the child persists the token and completes. An unsuccessful automatic-code
+attempt is a typed failure and enters the retry cooldown rather than claiming
+that a phone approval was missed. Genuine manual Microsoft/Duo flows retain
+their manual-approval reporting.
+
+This controls authentication state reporting; it does not prevent Microsoft from
+initiating a phone-method request. Assignment retrieval propagates pending
+authentication and token-renewal failures rather than returning an apparently
+successful empty list.
 
 Licensed under the MIT License.

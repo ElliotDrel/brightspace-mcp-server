@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, execFileSync } from "node:child_process";
+import { D2LApiClient } from "../../src/api/client.js";
 import { AuthRunner } from "../../src/auth/auth-runner.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }));
@@ -27,6 +28,7 @@ describe("AuthRunner", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
@@ -139,6 +141,61 @@ describe("AuthRunner", () => {
 
     expect(kill).not.toHaveBeenCalled();
     expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("keeps automatic progress distinct across retries of the same background child", async () => {
+    const runner = new AuthRunner();
+    const first = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending", numberMatch: undefined });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await first;
+    const second = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending", numberMatch: undefined });
+    await vi.advanceTimersByTimeAsync(5000);
+    await second;
+    const third = runner.run();
+    child.emit("close", 0);
+    expect(await third).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("retries the API only after background authentication persists its token and finishes", async () => {
+    const runner = new AuthRunner();
+    let stored: any = null;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ Identifier: "test-user" })));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = new D2LApiClient({ baseUrl: "https://brightspace.example.edu",
+      tokenManager: { getToken: async () => stored } as any,
+      onAuthExpired: () => runner.run() });
+    const endpoint = "/d2l/api/lp/1.63/users/whoami";
+    const first = expect(api.get(endpoint)).rejects.toMatchObject({ kind: "automaticPending" });
+    await vi.advanceTimersByTimeAsync(0);
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await first;
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const retry = api.get(endpoint);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    stored = { accessToken: "test-access-token", expiresAt: Date.now() + 3600000 };
+    child.emit("close", 0);
+    expect(await retry).toEqual({ Identifier: "test-user" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/users/whoami"),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer test-access-token" }) }));
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a later manual challenge instead of downgrading it to automatic progress", async () => {
+    const runner = new AuthRunner();
+    const first = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending" });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await first;
+    child.stdout.write("MFA_NUMBER:47\nAUTH_AUTOMATIC_PENDING\n");
+    const second = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    await vi.advanceTimersByTimeAsync(5000);
+    await second;
+    child.emit("close", 0);
   });
 
   it("joins the background child after an early MFA_NUMBER answer instead of spawning again", async () => {

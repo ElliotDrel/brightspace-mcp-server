@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
-import { MfaApprovalError, UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
+import { MfaApprovalError, UnsupportedAuthenticationError, AutomaticCodeAuthenticationError } from "../../src/auth/sso-flow.js";
 import { AUTH_COMMAND } from "../../src/utils/commands.js";
 import { generateTotp } from "../../src/auth/totp.js";
 
@@ -255,15 +255,64 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(onMfaChallenge).not.toHaveBeenCalled();
   });
 
-  it("still reports manual approval when code alternatives remain unavailable", async () => {
+  it("reports automatic progress rather than inferring manual approval from a timeout", async () => {
     captureWarnings();
     const onMfaChallenge = vi.fn();
+    const onAutomaticPending = vi.fn();
     const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
     const { page } = makeMfaPage([{ number: "42", challenge: true }]);
-    await expect((new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri, onMfaChallenge }) as any).handleMFA(page))
-      .rejects.toBeInstanceOf(MfaApprovalError);
-    expect(onMfaChallenge).toHaveBeenCalledOnce();
-    expect(onMfaChallenge).toHaveBeenCalledWith("42");
+    await expect((new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri,
+      onMfaChallenge, onAutomaticPending }) as any).handleMFA(page))
+      .rejects.toBeInstanceOf(AutomaticCodeAuthenticationError);
+    expect(onMfaChallenge).not.toHaveBeenCalled();
+    expect(onAutomaticPending).toHaveBeenCalledOnce();
+  });
+
+  it("finishes a visible code form before opening its alternate-method link", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill, continueClick } = makeMfaPage([
+      { code: true, otherMethod: true },
+      { code: true, otherMethod: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await (new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri }) as any).handleMFA(page);
+    expect(fill).toHaveBeenCalledOnce();
+    expect(continueClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps recovery automatic when code choices appear after the former grace period", async () => {
+    const onMfaChallenge = vi.fn();
+    const onAutomaticPending = vi.fn();
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill } = makeMfaPage([
+      ...Array.from({ length: 12 }, () => ({ number: "42", challenge: true })),
+      { otherMethod: true }, { codeMethod: true }, { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await (new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri,
+      onMfaChallenge, onAutomaticPending }) as any).handleMFA(page);
+    expect(fill).toHaveBeenCalledOnce();
+    expect(onMfaChallenge).not.toHaveBeenCalled();
+    expect(onAutomaticPending).toHaveBeenCalledOnce();
+  });
+
+  it("checks verified authentication before stale manual challenge controls", async () => {
+    const onMfaChallenge = vi.fn();
+    const { page } = makeMfaPage([
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true, number: "42", challenge: true },
+    ]);
+    await handleMFA(page, undefined, onMfaChallenge);
+    expect(onMfaChallenge).not.toHaveBeenCalled();
+  });
+
+  it("classifies an unfinished submitted code as automatic failure rather than phone approval", async () => {
+    const onMfaChallenge = vi.fn();
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const { page, fill } = makeMfaPage([{ code: true }]);
+    await expect((new PurdueSSOFlow({ baseUrl: BASE_URL, username: "alice", totpUri: uri,
+      onMfaChallenge }) as any).handleMFA(page)).rejects.toBeInstanceOf(AutomaticCodeAuthenticationError);
+    expect(fill).toHaveBeenCalledOnce();
+    expect(onMfaChallenge).not.toHaveBeenCalled();
   });
 
   it("does not submit a code when Microsoft shows another account", async () => {
