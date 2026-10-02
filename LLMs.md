@@ -52,6 +52,13 @@ when the Brightspace session ends the user reruns `auth` in a terminal:
 npx -y brightspace-mcp-server@latest setup --cuny
 ```
 
+If the user is at McGill University, use the McGill preset. Sign-in goes
+through myCourses' SAML redirect straight to Microsoft Entra:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --mcgill
+```
+
 If the user is at Pontificia Universidad Javeriana Cali, use the Javeriana
 preset. Sign-in goes through MobilityGuard OneGate, which asks in the
 terminal for a code from the user's authenticator app:
@@ -62,7 +69,7 @@ npx -y brightspace-mcp-server@latest setup --javeriana
 
 The wizard:
 
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--cuny`, or `--javeriana`)
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, or `--javeriana`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
@@ -244,6 +251,7 @@ src/
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
     suny-sso.ts             SUNY campus selection
     cuny-sso.ts             CUNY Login (Oracle OAM) credentials and authenticator code
+    mcgill-sso.ts           McGill myCourses SAML entry point, then shared Entra flow
     javeriana-sso.ts        Javeriana Cali (MobilityGuard OneGate) credentials and authenticator code
     session-store.ts        AES-256-GCM token persistence and v1 migration
     browser-state-store.ts  Encrypted cookie and browser storage persistence
@@ -273,6 +281,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
+| `npx -y brightspace-mcp-server@latest setup --mcgill` | Setup with McGill preset |
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
