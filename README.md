@@ -66,7 +66,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Assignments and rubrics | "What does the lab 4 spec actually ask for?" · "Why did I lose points on the analysis criterion?" |
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "Read the file attached to today's announcement" |
-| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" |
+| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" · or just read a file inline instead of saving it |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura and YouTube) |
