@@ -6,12 +6,12 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "3.10.2",
+  "version": "3.10.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "3.10.2",
+      "version": "3.10.3",
       "transport": {
         "type": "stdio"
       },
@@ -68,6 +68,13 @@
         {
           "name": "D2L_CURRENT_ONLY",
           "description": "Only return courses whose Access.StartDate to Access.EndDate window contains now, matching Brightspace's \"Current Courses\" widget. Default: false",
+          "isRequired": false,
+          "format": "boolean",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_DEV_MODE",
+          "description": "Set to true to record local tool timestamps and safe authentication outcomes in the account session directory. No arguments, results or credentials are logged. Default: false.",
           "isRequired": false,
           "format": "boolean",
           "isSecret": false
