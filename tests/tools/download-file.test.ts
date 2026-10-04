@@ -734,3 +734,35 @@ describe("download_file: inline mode (downloadPath omitted)", () => {
     expect(metadata.note).toContain("downloadPath");
   });
 });
+
+describe("download_file: instructor assignment attachments", () => {
+  const folders = (name = "instructions.pdf") => [{ Id: 5, IsHidden: false, Attachments: [{ FileId: 11, FileName: name, Size: 1024 }] }];
+  it.each(["instructions.pdf", "instructions.docx"])("saves %s without a student submission", async (name) => {
+    const body = name.endsWith("docx") ? fakeDocxBuffer("Handout") : minimalPdf("Handout");
+    const { call, rawRequested } = setup({ submissions: folders(name), body });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 11, source: "assignmentAttachment", downloadPath: targetDir });
+    expect(parse(result).mode).toBe("disk");
+    expect(await fs.readFile(parse(result).filePath)).toEqual(body);
+    expect(rawRequested).toEqual([`/d2l/api/le/1.0/${COURSE}/dropbox/folders/5/attachments/11`]);
+  });
+  it("returns instructor DOCX text inline", async () => {
+    const { call } = setup({ submissions: { Objects: folders("instructions.docx") }, body: fakeDocxBuffer("Assignment instructions") });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 11, source: "assignmentAttachment" });
+    expect(parse(result).mode).toBe("inline");
+    expect(textOf(result)).toContain("Assignment instructions");
+  });
+  it.each([99, 11])("refuses unknown or hidden attachment %s without fetching bytes", async (fileId) => {
+    const listed = folders();
+    if (fileId === 11) listed[0].IsHidden = true;
+    const { call, rawRequested } = setup({ submissions: listed });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId, source: "assignmentAttachment" });
+    expect(result.isError).toBe(true);
+    expect(rawRequested).toEqual([]);
+  });
+  it("rejects conflicting source identifiers", async () => {
+    const { call, rawRequested } = setup({ submissions: folders() });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 11, topicId: 7, source: "assignmentAttachment" });
+    expect(result.isError).toBe(true);
+    expect(rawRequested).toEqual([]);
+  });
+});
