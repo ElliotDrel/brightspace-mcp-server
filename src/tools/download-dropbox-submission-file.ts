@@ -7,7 +7,7 @@
 // Adapted from @el2060's fork (el2060/brightspace-mcp-server, MIT) —
 // permission handling rewritten to this project's ApiError/sanitizeError
 // conventions, and the download itself routed through this project's
-// secureDownload/MAX_FILE_SIZE (magic-byte file-type validation, path
+// secureDownload/MAX_DISK_FILE_SIZE (magic-byte file-type validation, path
 // containment, filename conflict resolution) instead of writing the buffer
 // directly as the fork did.
 
@@ -16,8 +16,8 @@ import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadDropboxSubmissionFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { validateContentId, MAX_FILE_SIZE } from "../utils/file-validator.js";
-import { secureDownload } from "../utils/download-helpers.js";
+import { validateContentId } from "../utils/file-validator.js";
+import { secureDownloadStream, MAX_DISK_FILE_SIZE } from "../utils/download-helpers.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 
@@ -122,10 +122,10 @@ export function registerDownloadDropboxSubmissionFile(
         }
 
         // Check the size Brightspace reported before downloading anything.
-        if (targetFile.Size > MAX_FILE_SIZE) {
+        if (targetFile.Size > MAX_DISK_FILE_SIZE) {
           return errorResponse(
             `File too large (${Math.round(targetFile.Size / 1024 / 1024)}MB). ` +
-              `Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+              `Maximum allowed: ${MAX_DISK_FILE_SIZE / 1024 / 1024}MB`
           );
         }
 
@@ -149,35 +149,11 @@ export function registerDownloadDropboxSubmissionFile(
           throw error;
         }
 
-        // Check Content-Length before downloading the body (prevent memory exhaustion).
-        const contentLength = parseInt(response.headers.get("Content-Length") ?? "0", 10);
-        if (contentLength > MAX_FILE_SIZE) {
-          return errorResponse(
-            `File too large (${Math.round(contentLength / 1024 / 1024)}MB). ` +
-              `Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-          );
-        }
-
-        const buffer = Buffer.from(await response.arrayBuffer());
-
-        // Double-check the actual size once downloaded.
-        if (buffer.length > MAX_FILE_SIZE) {
-          return errorResponse(
-            `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). ` +
-              `Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-          );
-        }
-
         const originalFilename = targetFile.FileName;
-        const effectiveFilename = customFilename || originalFilename;
-
-        // secureDownload applies this project's path-containment and
-        // magic-byte file-type checks and resolves filename conflicts,
-        // rather than writing the fetched buffer straight to disk.
-        const result = await secureDownload({
+        const result = await secureDownloadStream({
           targetDir: downloadPath,
-          filename: effectiveFilename,
-          data: buffer,
+          filename: customFilename || originalFilename,
+          response,
         });
 
         log(

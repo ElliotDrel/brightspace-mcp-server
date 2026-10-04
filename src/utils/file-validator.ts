@@ -58,7 +58,7 @@ const XML_EXTENSION_MIMES: Record<string, string> = {
 };
 
 /**
- * Maximum file size for downloads (50 MB).
+ * Maximum buffered download/extraction size (50 MB).
  * Prevents memory exhaustion from malicious large file requests.
  */
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -305,4 +305,36 @@ export function validateBaseUrl(url: string, expectedBaseUrl: string): void {
   ) {
     return reject();
   }
+}
+
+/** Validate a streamed file without loading it into memory. */
+export async function validateFileTypeOnDisk(filePath: string, filename: string): Promise<{ mime: string; ext: string }> {
+  const { fileTypeFromFile } = await import("file-type");
+  const detected = await fileTypeFromFile(filePath);
+  if (detected) {
+    let mime = detected.mime;
+    const extension = path.extname(filename).toLowerCase();
+    if (mime === CFB_MIME) mime = CFB_EXTENSION_MIMES[extension] ?? mime;
+    if (mime === XML_MIME) mime = XML_EXTENSION_MIMES[extension] ?? mime;
+    if (!ALLOWED_MIME_TYPES.includes(mime)) throw new DownloadError("unsupportedType", `File type '${mime}' not allowed`, mime);
+    return { mime, ext: detected.ext };
+  }
+  const { createReadStream } = await import("node:fs");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let head = "";
+  let size = 0;
+  try {
+    for await (const chunk of createReadStream(filePath)) {
+      const bytes = chunk as Buffer;
+      size += bytes.length;
+      if (bytes.includes(0)) throw new Error("Binary data");
+      const text = decoder.decode(bytes, { stream: true });
+      if (head.length < 8192) head += text.slice(0, 8192 - head.length);
+    }
+    decoder.decode();
+    if (size === 0) throw new Error("Empty file");
+  } catch {
+    throw new DownloadError("undetectableType", "Could not determine file type or type not allowed");
+  }
+  return validateFileType(Buffer.from(head), undefined, filename);
 }

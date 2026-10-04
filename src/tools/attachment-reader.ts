@@ -4,6 +4,8 @@
  * Licensed under MIT. See LICENSE file for details.
  */
 
+import { readDownloadBuffer } from "../utils/download-helpers.js";
+import { MAX_FILE_SIZE } from "../utils/file-validator.js";
 import { D2LApiClient } from "../api/index.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
@@ -71,8 +73,10 @@ export async function readAttachment(
   const base = describeAttachment(attachment);
   if (!extract) return { ...base, text: null, note: "Text extraction was not requested." };
 
+  if (attachment.Size > MAX_FILE_SIZE) return { ...base, text: null, note: "File too large for text extraction (maximum 50MB). Use download_file with downloadPath to save it to disk." };
+
   const response = await apiClient.getRaw(sourcePath);
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await readDownloadBuffer(response);
 
   let text: string | null = null;
   let note: string | undefined;

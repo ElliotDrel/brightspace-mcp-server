@@ -195,6 +195,7 @@ function setup({ disposition, submissions, newsItem, contentLength, body = pdfBu
           ...(disposition ? { "Content-Disposition": disposition } : {}),
           ...(contentLength !== undefined ? { "Content-Length": String(contentLength) } : {}),
         }),
+        body: new Response(toArrayBuffer(body)).body,
         arrayBuffer: async () => toArrayBuffer(body),
       };
     }),
@@ -448,7 +449,7 @@ describe("download_file: announcement attachments", () => {
 
   it("refuses an attachment whose listed size is over the limit without downloading it", async () => {
     const { call, rawRequested } = setup({
-      newsItem: newsItem([file(77, "huge.pdf", 200 * 1024 * 1024)]),
+      newsItem: newsItem([file(77, "huge.pdf", 2 * 1024 * 1024 * 1024)]),
     });
 
     const result = await call({ courseId: COURSE, newsId: 55, fileId: 77, downloadPath: targetDir });
@@ -460,7 +461,7 @@ describe("download_file: announcement attachments", () => {
   it("refuses a download whose Content-Length is over the limit", async () => {
     const { call } = setup({
       newsItem: newsItem([file(77, "prompts.pdf")]),
-      contentLength: 200 * 1024 * 1024,
+      contentLength: 2 * 1024 * 1024 * 1024,
     });
 
     const result = await call({ courseId: COURSE, newsId: 55, fileId: 77, downloadPath: targetDir });

@@ -145,6 +145,8 @@ function authFailureMessage(error: AuthProcessError): string {
  * confirms it is a bare type token.
  */
 const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
+  tooLargeDisk: "File too large. Maximum disk download: 1024MB. Open it from Brightspace in a browser instead.",
+  tooLargeExtraction: "File too large for buffered extraction (maximum 50MB). Use download_file with an absolute downloadPath to save it to disk instead.",
   unsupportedType:
     "The file's format is not on the allowed download list. " +
     "Open it from Brightspace in a browser instead.",

@@ -20,6 +20,8 @@
 
 /** Closed set of ways a download can fail before the bytes reach disk. */
 export type DownloadFailureKind =
+  | "tooLargeDisk"
+  | "tooLargeExtraction"
   | "unsupportedType"
   | "undetectableType"
   | "badFilename"

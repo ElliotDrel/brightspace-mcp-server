@@ -66,6 +66,7 @@ function setup({ newsItems, file = Buffer.alloc(0) }: { newsItems: unknown; file
         ok: true,
         status: 200,
         headers: new Headers(),
+        body: new Response(new Uint8Array(file)).body,
         arrayBuffer: async () =>
           file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
       };

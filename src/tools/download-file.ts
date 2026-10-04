@@ -16,7 +16,7 @@ import { checkTopicAvailability } from "./topic-availability.js";
 // validated anything itself. Inline mode never writes to disk, so it calls
 // validateFileType directly to enforce the same magic-byte allowlist.
 import { validateContentId, validateFileType, MAX_FILE_SIZE } from "../utils/file-validator.js";
-import { secureDownload } from "../utils/download-helpers.js";
+import { secureDownload, secureDownloadStream, MAX_DISK_FILE_SIZE, readDownloadBuffer } from "../utils/download-helpers.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
 import fs from "node:fs/promises";
@@ -251,7 +251,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content, instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
+        "Download a file from course content, instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Disk mode streams files up to 1024MB; inline delivery stays capped at 10MB. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -361,12 +361,16 @@ async function downloadAssignmentAttachment(
   const attachments = folder.Attachments ?? [];
   const file = attachments.find((candidate: any) => candidate.FileId === fileId);
   if (!file) return errorResponse(`File ID ${fileId} not found on this assignment. Available files: ${attachments.map((candidate: any) => `${candidate.FileName} (ID: ${candidate.FileId})`).join(", ")}`);
-  if (file.Size > MAX_FILE_SIZE) return errorResponse(`File too large. Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+  if (file.Size > (downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE)) return errorResponse(`File too large. Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`);
   const response = await apiClient.getRaw(apiClient.le(courseId, `/dropbox/folders/${folderId}/attachments/${fileId}`));
+  if (downloadPath !== undefined) {
+    const filename = parseContentDispositionFilename(response.headers.get("Content-Disposition") ?? "") ?? file.FileName;
+    return finishStream(response, filename, downloadPath, customFilename);
+  }
   const length = Number(response.headers.get("Content-Length"));
-  if (length > MAX_FILE_SIZE) return errorResponse(`File too large. Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > MAX_FILE_SIZE) return errorResponse(`File too large. Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+  if (length > MAX_FILE_SIZE) return errorResponse(`File too large. Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`);
+  const buffer = await readDownloadBuffer(response);
+  if (buffer.length > MAX_FILE_SIZE) return errorResponse(`File too large. Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`);
   const filename = parseContentDispositionFilename(response.headers.get("Content-Disposition") ?? "") ?? file.FileName;
   return finishDownload(buffer, filename, downloadPath, customFilename, "Assignment attachment");
 }
@@ -429,6 +433,11 @@ async function downloadContentFile(
     throw error;
   }
 
+  if (downloadPath !== undefined) {
+    const filename = parseContentDispositionFilename(response.headers.get("Content-Disposition") ?? "") ?? "download";
+    return finishStream(response, filename, downloadPath, customFilename);
+  }
+
   // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
   const contentLength = parseInt(
     response.headers.get("Content-Length") ?? "0",
@@ -436,7 +445,7 @@ async function downloadContentFile(
   );
   if (contentLength > MAX_FILE_SIZE) {
     return errorResponse(
-      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
@@ -447,12 +456,12 @@ async function downloadContentFile(
   log("DEBUG", `Content-Disposition filename: ${filename}`);
 
   // Download body as buffer
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await readDownloadBuffer(response);
 
   // Double-check actual size
   if (buffer.length > MAX_FILE_SIZE) {
     return errorResponse(
-      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
@@ -532,9 +541,9 @@ async function downloadSubmissionFile(
   }
 
   // Check file size before downloading
-  if (file.Size > MAX_FILE_SIZE) {
+  if (file.Size > (downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE)) {
     return errorResponse(
-      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
@@ -547,14 +556,15 @@ async function downloadSubmissionFile(
 
   // Fetch file
   const response = await apiClient.getRaw(downloadApiPath);
+  if (downloadPath !== undefined) return finishStream(response, file.FileName, downloadPath, customFilename);
 
   // Download body as buffer
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await readDownloadBuffer(response);
 
   // Double-check actual size
   if (buffer.length > MAX_FILE_SIZE) {
     return errorResponse(
-      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
@@ -601,9 +611,9 @@ async function downloadNewsAttachment(
     );
   }
 
-  if (file.Size > MAX_FILE_SIZE) {
+  if (file.Size > (downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE)) {
     return errorResponse(
-      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
@@ -612,6 +622,11 @@ async function downloadNewsAttachment(
     apiClient.le(courseId, `/news/${newsId}/attachments/${fileId}`)
   );
 
+  if (downloadPath !== undefined) {
+    const filename = parseContentDispositionFilename(response.headers.get("Content-Disposition") ?? "") ?? file.FileName;
+    return finishStream(response, filename, downloadPath, customFilename);
+  }
+
   // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
   const contentLength = parseInt(
     response.headers.get("Content-Length") ?? "0",
@@ -619,7 +634,7 @@ async function downloadNewsAttachment(
   );
   if (contentLength > MAX_FILE_SIZE) {
     return errorResponse(
-      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
@@ -627,16 +642,21 @@ async function downloadNewsAttachment(
   const filename = parseContentDispositionFilename(disposition) ?? file.FileName;
 
   // Download body as buffer
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await readDownloadBuffer(response);
 
   // Double-check actual size
   if (buffer.length > MAX_FILE_SIZE) {
     return errorResponse(
-      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${(downloadPath === undefined ? MAX_FILE_SIZE : MAX_DISK_FILE_SIZE) / 1024 / 1024}MB`
     );
   }
 
   const originalFilename = filename;
 
   return finishDownload(buffer, originalFilename, downloadPath, customFilename, "Announcement attachment");
+}
+
+async function finishStream(response: Response, originalFilename: string, downloadPath: string, customFilename?: string): Promise<CallToolResult> {
+  const result = await secureDownloadStream({ response, targetDir: downloadPath, filename: customFilename || originalFilename });
+  return toolResponse({ mode: "disk", success: true, filePath: result.path, fileSize: result.size, mimeType: result.mime, originalFilename, message: `File downloaded successfully to ${result.path}` });
 }

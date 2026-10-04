@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { secureDownload, resolveFilenameConflict } from "../../src/utils/download-helpers.js";
+import { secureDownload, resolveFilenameConflict, secureDownloadStream, readDownloadBuffer } from "../../src/utils/download-helpers.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 
 /**
@@ -166,5 +166,66 @@ describe("resolveFilenameConflict", () => {
       await fs.writeFile(path.join(targetDir, name), "x");
     }
     expect(await resolveFilenameConflict(targetDir, "x.pdf")).toBe("x(3).pdf");
+  });
+});
+
+describe("secureDownloadStream", () => {
+  it("streams a file above 150MB without reading arrayBuffer", async () => {
+    const chunk = Buffer.alloc(1024 * 1024);
+    let count = 0;
+    const response = new Response(new ReadableStream({ pull(controller) {
+      if (count === 151) return controller.close();
+      const bytes = count === 0 ? Buffer.from(chunk) : chunk;
+      if (count === 0) bytes.write("%PDF-1.4\n");
+      count++;
+      controller.enqueue(bytes);
+    } }));
+    response.arrayBuffer = async () => { throw new Error("must stream"); };
+    const result = await secureDownloadStream({ targetDir, filename: "large.pdf", response });
+    expect(result.size).toBe(151 * 1024 * 1024);
+    expect((await fs.stat(result.path)).size).toBe(result.size);
+    expect(result.mime).toBe("application/pdf");
+    expect(await fs.readdir(targetDir)).toEqual(["large.pdf"]);
+  }, 30_000); // Includes writing and copying 151 MiB on Windows CI disks.
+  it.each([undefined, "1"])("enforces actual bytes with Content-Length %s and cleans partial files", async (reported) => {
+    const response = new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(pdfBuffer()); controller.close();
+    } }), { headers: reported ? { "Content-Length": reported } : {} });
+    await expect(secureDownloadStream({ targetDir, filename: "over.pdf", response, maxBytes: 32 })).rejects.toThrow("File too large");
+    expect(await fs.readdir(targetDir)).toEqual([]);
+  });
+  it("cleans interrupted streams", async () => {
+    let sent = false;
+    const response = new Response(new ReadableStream({ pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(pdfBuffer()); }
+      else controller.error(new Error("connection lost"));
+    } }));
+    await expect(secureDownloadStream({ targetDir, filename: "partial.pdf", response })).rejects.toThrow("connection lost");
+    expect(await fs.readdir(targetDir)).toEqual([]);
+  });
+  it("contains traversing filenames and preserves concurrent download collisions", async () => {
+    const results = await Promise.all([0, 1].map(() => secureDownloadStream({ targetDir, filename: "../../safe.pdf", response: new Response(pdfBuffer()) })));
+    expect(results.every(result => inside(result.path))).toBe(true);
+    expect(new Set(results.map(result => result.path)).size).toBe(2);
+    expect(await fs.readdir(targetDir)).toHaveLength(2);
+  });
+  it("refuses binary and invalid UTF8 content without leaving files", async () => {
+    for (const bytes of [Buffer.from([0, 1]), Buffer.from([128, 129, 130])]) {
+      await expect(secureDownloadStream({ targetDir, filename: "bad.txt", response: new Response(bytes) })).rejects.toThrow();
+      expect(await fs.readdir(targetDir)).toEqual([]);
+    }
+  });
+});
+
+
+describe("readDownloadBuffer", () => {
+  it("limits real bytes when Content-Length lies", async () => {
+    const response = new Response(Buffer.alloc(64), { headers: { "Content-Length": "1" } });
+    await expect(readDownloadBuffer(response, 32)).rejects.toThrow("File too large");
+  });
+  it("reads bounded bytes without arrayBuffer", async () => {
+    const response = new Response(Buffer.from("hello"));
+    response.arrayBuffer = async () => { throw new Error("must stream"); };
+    expect(await readDownloadBuffer(response, 32)).toEqual(Buffer.from("hello"));
   });
 });

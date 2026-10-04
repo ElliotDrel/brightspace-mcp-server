@@ -93,6 +93,7 @@ function setup({ folders, file }: Setup) {
         ok: true,
         status: 200,
         headers: new Headers(),
+        body: new Response(new Uint8Array(file as Buffer)).body,
         arrayBuffer: async () => (file as Buffer).buffer.slice(
           (file as Buffer).byteOffset,
           (file as Buffer).byteOffset + (file as Buffer).byteLength
@@ -287,4 +288,14 @@ describe("get_assignment_files reading one file", () => {
     const payload = parse(await call({ courseId: COURSE, fileId: 11 }));
     expect(payload.error).toMatch(/folderId is required/i);
   });
+});
+
+
+it("reports the extraction cap and download route without fetching an oversized attachment", async () => {
+  const { call, rawRequested } = setup({ folders: [folder(1, "Large handout", [attachment(11, "slides.pptx", 151 * 1024 * 1024)])] });
+  const result = parse(await call({ courseId: COURSE, folderId: 1, fileId: 11 }));
+  expect(result.file.text).toBeNull();
+  expect(result.file.note).toContain("50MB");
+  expect(result.file.downloadArgs.source).toBe("assignmentAttachment");
+  expect(rawRequested).toEqual([]);
 });

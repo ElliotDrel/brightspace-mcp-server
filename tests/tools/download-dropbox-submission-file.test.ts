@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { registerDownloadDropboxSubmissionFile } from "../../src/tools/download-dropbox-submission-file.js";
 import { ApiError } from "../../src/api/errors.js";
-import { MAX_FILE_SIZE } from "../../src/utils/file-validator.js";
+import { MAX_DISK_FILE_SIZE as MAX_FILE_SIZE } from "../../src/utils/download-helpers.js";
 
 const COURSE_ID = 101;
 const FOLDER_ID = 55;
@@ -46,6 +46,7 @@ function setup({ submissionsResult = submissionsList(), rawResult, body = pdfBuf
         ok: true,
         status: 200,
         headers: new Headers({ "Content-Length": String(body.byteLength) }),
+        body: new Response(toArrayBuffer(body)).body,
         arrayBuffer: async () => toArrayBuffer(body),
       };
     }),
@@ -111,8 +112,8 @@ describe("download_dropbox_submission_file", () => {
     expect(await fs.readdir(targetDir)).toEqual([]);
   });
 
-  it("refuses a file whose actual downloaded size exceeds MAX_FILE_SIZE even when reported size lied", async () => {
-    const oversized = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(MAX_FILE_SIZE)]);
+  it("accepts a streamed file above the old buffer limit", async () => {
+    const oversized = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(51 * 1024 * 1024)]);
     const { call } = setup({ body: oversized });
     const result = await call({
       courseId: COURSE_ID,
@@ -122,8 +123,8 @@ describe("download_dropbox_submission_file", () => {
       downloadPath: targetDir,
     });
 
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("too large");
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text).fileSize).toBe(oversized.length);
   });
 
   it("refuses a file type that is not on the allowlist, via secureDownload's magic-byte check", async () => {

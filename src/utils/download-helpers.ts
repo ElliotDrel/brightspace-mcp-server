@@ -5,6 +5,8 @@
  */
 
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
+import { DownloadError } from "./download-errors.js";
 import path from "node:path";
 import { validateDownloadPath, validateFileType, MAX_FILE_SIZE } from "./file-validator.js";
 import { log } from "./logger.js";
@@ -119,4 +121,96 @@ export async function secureDownload(options: {
     size,
     mime,
   };
+}
+
+/** Disk transfers stream to a temporary file; extraction keeps its smaller buffer cap. */
+export const MAX_DISK_FILE_SIZE = 1024 * 1024 * 1024; // 1 GiB
+
+export async function secureDownloadStream(options: {
+  targetDir: string;
+  filename: string;
+  response: Response;
+  /** Optional stricter cap; never permits exceeding the disk maximum. */
+  maxBytes?: number;
+}): Promise<{ path: string; size: number; mime: string }> {
+  const { targetDir, filename, response } = options;
+  const maximum = options.maxBytes ?? MAX_DISK_FILE_SIZE;
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_DISK_FILE_SIZE) throw new Error("Invalid download size limit");
+  const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
+  const stats = await fs.stat(targetDir);
+  if (!stats.isDirectory()) throw new Error(`Target path is not a directory: ${targetDir}`);
+  const reported = Number(response.headers.get("Content-Length"));
+  if (reported > maximum) {
+    await response.body?.cancel();
+    throw new DownloadError("tooLargeDisk", `File too large. Maximum disk download: ${maximum / 1024 / 1024}MB`);
+  }
+  if (!response.body) throw new Error("File download returned an empty body");
+  const temporaryDir = await fs.mkdtemp(path.join(targetDir, ".brightspace-download-"));
+  const temporaryPath = path.join(temporaryDir, "download.part");
+  let size = 0;
+  try {
+    const handle = await fs.open(temporaryPath, "wx");
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maximum) throw new DownloadError("tooLargeDisk", `File too large. Maximum disk download: ${maximum / 1024 / 1024}MB`);
+        let written = 0;
+        while (written < value.byteLength) {
+          const result = await handle.write(value, written, value.byteLength - written);
+          if (result.bytesWritten === 0) throw new Error("Could not write downloaded file");
+          written += result.bytesWritten;
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+      await handle.close();
+    }
+    const { validateFileTypeOnDisk } = await import("./file-validator.js");
+    const { mime } = await validateFileTypeOnDisk(temporaryPath, safeFilename);
+    const ext = path.extname(safeFilename);
+    const basename = path.basename(safeFilename, ext);
+    for (let attempt = 0; attempt <= 100; attempt++) {
+      const candidate = attempt === 0 ? safeFilename : `${basename}(${attempt})${ext}`;
+      const finalPath = path.join(targetDir, candidate);
+      try {
+        // Exclusive copy prevents a competing download from being overwritten.
+        await fs.copyFile(temporaryPath, finalPath, constants.COPYFILE_EXCL);
+        return { path: finalPath, size, mime };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
+    throw new Error("Could not resolve filename conflict after 100 attempts");
+  } finally {
+    await fs.rm(temporaryDir, { recursive: true, force: true });
+  }
+}
+
+/** Read a small extraction response with a limit even when headers are missing or false. */
+export async function readDownloadBuffer(response: Response, maximum = MAX_FILE_SIZE): Promise<Buffer> {
+  if (Number(response.headers.get("Content-Length")) > maximum) {
+    await response.body?.cancel();
+    throw new DownloadError("tooLargeExtraction", `File too large for buffered extraction. Maximum allowed: ${maximum / 1024 / 1024}MB. Use download_file with downloadPath to save it to disk.`);
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximum) throw new DownloadError("tooLargeExtraction", `File too large for buffered extraction. Maximum allowed: ${maximum / 1024 / 1024}MB. Use download_file with downloadPath to save it to disk.`);
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, size);
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
