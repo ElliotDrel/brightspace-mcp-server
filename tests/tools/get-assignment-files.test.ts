@@ -31,6 +31,7 @@ const folder = (
   Name: name,
   DueDate: "2026-09-30T03:59:00.000Z",
   IsHidden: false,
+  GroupTypeId: null,
   Attachments: attachments,
   ...extra,
 });
