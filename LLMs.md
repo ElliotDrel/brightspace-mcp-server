@@ -144,7 +144,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_calendar_events` | Course calendar events (exams, labs, schedule changes, hand-made deadlines) in a window, default the next 7 days |
 | `get_announcements` | Recent course announcements, with each one's attached files (`attachments`) |
 | `get_syllabus` | Syllabus document for a course |
-| `get_course_content` | Module tree and content topics |
+| `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback) |
 | `get_discussions` | Discussion forums and recent posts |
 | `search_course` | Keyword search across a course's content (modules/topics/file names), announcements, and discussion forums/topics in one call |
 | `get_roster` | Classlist for a course |

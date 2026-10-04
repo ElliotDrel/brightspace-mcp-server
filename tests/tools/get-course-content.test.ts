@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerGetCourseContent } from "../../src/tools/get-course-content.js";
+import { flattenContentTree, rankEntries } from "../../src/tools/search-course.js";
 
 /**
  * A module whose structure lists itself is a cycle, and with no maxDepth the
@@ -371,4 +372,32 @@ describe("get_course_content embedded structure fallback", () => {
     expect(body.moduleCount).toBe(1);
     expect(body.contentTree[0].children).toEqual([]);
   });
+});
+
+describe("get_course_content module descriptions (#152)", () => {
+  it("preserves recording links in an empty module and its searchable body without session tokens", async () => {
+    const { call } = setupBrokenStructure({
+      ...SELF_REFERENCING_MODULE,
+      Description: {
+        Text: "Recording",
+        Html: '<p><a href="/d2l/common/dialogs/quickLink/quickLink.d2l?type=lti&amp;ou=101&amp;d2lSessionVal=secret">MOSFET recording</a></p>',
+      },
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+    const module = body.contentTree[0];
+    expect(module.children).toEqual([]);
+    expect(module.description).toBe("[MOSFET recording](/d2l/common/dialogs/quickLink/quickLink.d2l?type=lti&ou=101)");
+    expect(module.description).not.toContain("secret");
+    const hits = rankEntries(flattenContentTree(body.contentTree), "MOSFET", 10);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].snippet).toContain("quickLink.d2l?type=lti&ou=101");
+  });
+
+  it.each([null, { Text: "Plain description", Html: "" }, { Text: "Plain description", Html: "  " }])(
+    "keeps the plain-text fallback for description %j", async (Description) => {
+      const { call } = setupBrokenStructure({ ...SELF_REFERENCING_MODULE, Description });
+      const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+      expect(body.contentTree[0].description).toBe(Description?.Text ?? null);
+    }
+  );
 });
