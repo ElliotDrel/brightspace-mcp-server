@@ -20,6 +20,7 @@ import { getYouTubeTranscript } from "../utils/transcript/youtube.js";
 import { NoTranscriptError, TranscriptFetchError } from "../utils/transcript/errors.js";
 import type { FetchLike, TranscriptResult } from "../utils/transcript/types.js";
 import { log } from "../utils/logger.js";
+import { brightspaceLtiLaunchUrl } from "../utils/transcript/lti.js";
 
 interface ContentTopic {
   Id: number;
@@ -127,7 +128,8 @@ export function registerGetVideoTranscript(
         "Read the transcript of a video embedded in course content, such as a recorded lecture or explainer clip. " +
         "Call it with courseId and topicId from get_course_content (typeFilter: 'video' or 'other'), or with videoUrl " +
         "directly if you already have the link. Returns transcript text with timestamps, plus title and duration when " +
-        "available. Currently supports Kaltura (e.g. BoilerCast) and YouTube; other platforms return a clear message " +
+        "available. Currently supports direct Kaltura (e.g. BoilerCast) and YouTube URLs. Brightspace LTI quickLinks " +
+        "require an authenticated launch that this tool does not perform and return reasonCode: 'unresolved_lti'. Other platforms return a clear message " +
         "naming what isn't supported yet. Use offset/maxChars to page through a long transcript. Read only — this " +
         "never marks the video as watched.",
       inputSchema: GetVideoTranscriptSchema,
@@ -150,6 +152,24 @@ export function registerGetVideoTranscript(
           return errorResponse(
             "Provide either videoUrl, or both courseId and topicId to look up the video from course content."
           );
+        }
+
+        const launchUrl = brightspaceLtiLaunchUrl(resolvedUrl);
+        if (launchUrl) {
+          return toolResponse({
+            courseId,
+            topicId,
+            videoUrl: launchUrl,
+            platform: "unknown",
+            sourceUrl: launchUrl,
+            hasTranscript: false,
+            reasonCode: "unresolved_lti",
+            sourcesChecked: [videoUrl ? "provided_url" : "brightspace_content_topic"],
+            message:
+              "This Brightspace link requires an authenticated LTI launch before the video platform and captions can be determined. " +
+              "This tool does not perform that launch. Open the source link in Brightspace; a direct Kaltura or YouTube video URL can be used with this tool. " +
+              "This result does not establish whether the video platform is supported or captions exist.",
+          });
         }
 
         const platform = detectVideoPlatform(resolvedUrl);

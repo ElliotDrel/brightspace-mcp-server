@@ -104,6 +104,32 @@ describe("get_video_transcript — Kaltura", () => {
 });
 
 describe("get_video_transcript — unsupported and unresolved cases", () => {
+  it.each([
+    "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=lecture&d2lSessionVal=secret",
+    "https://purdue.brightspace.com/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=lecture&D2LSecureSessionVal=secret",
+  ])("distinguishes an unresolved LTI topic from an unsupported platform: %s", async (url) => {
+    const fetchImpl = kalturaFetch();
+    const { call } = setup(fetchImpl, url);
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+    expect(body.hasTranscript).toBe(false);
+    expect(body.reasonCode).toBe("unresolved_lti");
+    expect(body.platform).toBe("unknown");
+    expect(body.videoUrl).toBe(body.sourceUrl);
+    expect(body.sourceUrl).toContain("rcode=lecture");
+    expect(body.sourceUrl).not.toMatch(/secret|sessionval/i);
+    expect(body.sourcesChecked).toEqual(["brightspace_content_topic"]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("recognizes a directly supplied LTI quickLink without fetching it", async () => {
+    const fetchImpl = kalturaFetch();
+    const { call, apiClient } = setup(fetchImpl);
+    const result = await call({ videoUrl: "https://purdue.brightspace.com/d2l/common/dialogs/quickLink/quickLink.d2l?type=lti&rcode=lecture" });
+    expect(JSON.parse(result.content[0].text).sourcesChecked).toEqual(["provided_url"]);
+    expect(apiClient.get).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("names the platform when it isn't supported yet", async () => {
     const { call } = setup(kalturaFetch(), null);
     const result = await call({ videoUrl: "https://purdue.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=1" });
@@ -111,6 +137,7 @@ describe("get_video_transcript — unsupported and unresolved cases", () => {
 
     expect(body.hasTranscript).toBe(false);
     expect(body.platform).toBe("panopto");
+    expect(body).not.toHaveProperty("reasonCode", "unresolved_lti");
     expect(body.message).toMatch(/Panopto/);
   });
 

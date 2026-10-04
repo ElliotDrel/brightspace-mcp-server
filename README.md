@@ -77,6 +77,8 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
 
+Syllabus retrieval checks the Brightspace course overview and its attachment. External syllabus tools such as Simple Syllabus are not queried; an empty overview result does not mean the course has no syllabus. Video transcripts support direct Kaltura and YouTube URLs. Brightspace LTI quickLinks, including some BoilerCast recordings, return an explicit unresolved-launch explanation and the source link because the transcript tool does not perform an authenticated LTI launch.
+
 ## Prompts
 
 Apps with a prompt picker (like Claude Desktop) also offer four ready-made prompts, so you can start from one click instead of typing a question:

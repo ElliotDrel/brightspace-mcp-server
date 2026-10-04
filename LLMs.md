@@ -143,7 +143,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_upcoming_due_dates` | Due dates across all courses within a window |
 | `get_calendar_events` | Course calendar events (exams, labs, schedule changes, hand-made deadlines) in a window, default the next 7 days |
 | `get_announcements` | Recent course announcements, with each one's attached files (`attachments`) |
-| `get_syllabus` | Syllabus document for a course |
+| `get_syllabus` | Brightspace course overview and attachment; reports checked sources, does not query external/LTI syllabus tools |
 | `get_course_content` | Module tree and content topics |
 | `get_discussions` | Discussion forums and recent posts |
 | `search_course` | Keyword search across a course's content (modules/topics/file names), announcements, and discussion forums/topics in one call |
@@ -187,7 +187,9 @@ points; each renders a single user message that names the tools above by their r
 | `study_planner` | `daysAhead` (optional, default 7) | Plans study time from upcoming due dates and calendar events |
 | `course_summary` | `courseId` (required) | Syllabus, content outline, assignments, and grades for one course |
 
-`get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports Kaltura (e.g. Purdue's BoilerCast) via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
+`get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports direct Kaltura URLs via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. BoilerCast links routed through Brightspace LTI quickLinks require an authenticated launch that this tool does not perform: they return `hasTranscript: false`, `reasonCode: "unresolved_lti"`, `sourcesChecked`, and a `sourceUrl` with D2L session query parameters removed. A relative sourceUrl opens relative to the Brightspace tenant. This does not establish the video platform or whether captions exist. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
+
+`get_syllabus` checks the Brightspace overview and its attachment. It reports `sourceScope: "brightspace_overview"`, `sourcesChecked` entries with `available`, `not_found`, or `unavailable` status, and `externalSyllabusSourcesChecked: false`. It preserves links provided in the overview description, but does not discover or launch external syllabus tools such as Simple Syllabus navigation links or fetch their exported PDFs. When neither text nor an attachment is retrieved, `reasonCode: "overview_syllabus_not_retrieved"` explains this limit; it does not declare that the course has no syllabus. An unavailable attachment source is a failed read, not evidence of absence.
 
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 

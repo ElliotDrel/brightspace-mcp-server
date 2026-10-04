@@ -33,7 +33,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the Brightspace course overview text and optional overview attachment. Returns the overview description as markdown and reports sourcesChecked. External or LTI syllabus tools (such as Simple Syllabus navigation links) are not queried; an empty overview does not mean the course has no syllabus. If downloadPath is provided, also downloads the overview attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -68,27 +68,25 @@ export function registerGetSyllabus(
 
         // Fetch overview text
         let overview: CourseOverview | null = null;
+        const sourcesChecked: { source: string; status: string }[] = [];
         try {
           overview = await apiClient.get<CourseOverview>(
             apiClient.le(courseId, "/overview"),
             { ttl: DEFAULT_CACHE_TTLS.courseContent }
           );
+          sourcesChecked.push({ source: "brightspace_overview", status: "available" });
         } catch (error) {
           if (error instanceof ApiError && error.status === 404) {
-            return toolResponse({
-              courseId,
-              description: null,
-              hasAttachment: false,
-              message: "No syllabus/overview found for this course.",
-            });
+            sourcesChecked.push({ source: "brightspace_overview", status: "not_found" });
+          } else {
+            throw error;
           }
-          throw error;
         }
 
         // Convert description HTML to markdown
-        const description = overview?.Description?.Html
+        const description = overview?.Description?.Html?.trim()
           ? convertHtmlToMarkdown(overview.Description.Html).markdown
-          : null;
+          : overview?.Description?.Text ?? null;
 
         // Always attempt to fetch the attachment so we can extract PDF text
         let attachmentBuffer: Buffer | null = null;
@@ -129,11 +127,16 @@ export function registerGetSyllabus(
                 `Attachment too large (${Math.round(attachmentBuffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
               );
             }
+            sourcesChecked.push({ source: "brightspace_overview_attachment", status: "available" });
+          } else {
+            sourcesChecked.push({ source: "brightspace_overview_attachment", status: response.status === 404 ? "not_found" : "unavailable" });
           }
         } catch (error) {
           if (error instanceof ApiError && error.status === 404) {
             hasAttachment = false;
+            sourcesChecked.push({ source: "brightspace_overview_attachment", status: "not_found" });
           } else {
+            sourcesChecked.push({ source: "brightspace_overview_attachment", status: "unavailable" });
             log("DEBUG", "Could not fetch syllabus attachment", error);
           }
         }
@@ -182,7 +185,21 @@ export function registerGetSyllabus(
         log("INFO", `get_syllabus: Retrieved overview for course ${courseId}`);
 
         // Build response
-        const result: Record<string, unknown> = { courseId, description };
+        const result: Record<string, unknown> = {
+          courseId,
+          description,
+          sourcesChecked,
+          externalSyllabusSourcesChecked: false,
+          sourceScope: "brightspace_overview",
+          attachmentRetrieved: Boolean(attachmentBuffer?.byteLength),
+        };
+        if (!description?.trim() && !attachmentBuffer?.byteLength) {
+          result.reasonCode = "overview_syllabus_not_retrieved";
+          result.message =
+            "No syllabus text or attachment was retrieved from the Brightspace course overview. " +
+            "External and LTI syllabus sources, including Simple Syllabus navigation links, were not queried. " +
+            "The course may still have a syllabus there; open the course in Brightspace and check its syllabus navigation link or content.";
+        }
 
         if (syllabusText) {
           result.syllabusText = syllabusText;
