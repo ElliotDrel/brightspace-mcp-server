@@ -244,7 +244,7 @@ describe("get_my_grades grade-restricted courses", () => {
 
     const payload = parse(await call({}));
 
-    expect(payload.courses).toEqual([
+    expect(payload.courses).toMatchObject([
       { courseId: COURSE_B.Id, courseName: COURSE_B.Name, grades: [grade("Quiz 2")].map((gv) => ({
         name: gv.GradeObjectName,
         displayGrade: gv.DisplayedGrade,
@@ -292,5 +292,26 @@ describe("get_my_grades grade-restricted courses", () => {
     expect(result.content[0].text).toContain(
       "https://brightspace.example.edu/d2l/lms/grades/my_grades/main.d2l?ou=101"
     );
+  });
+});
+
+describe("get_my_grades public instructor feedback", () => {
+  it.each([false, true])("preserves HTML comments in single/all courses (all=%s)", async (all) => {
+    const { call } = setup((path) => path.includes("/enrollments/")
+      ? enrollmentPage(COURSE_A, true)
+      : [{ ...grade("Quiz"), Comments: { Text: "", Html: "<p><strong>Good</strong> reasoning.</p>" } }]);
+    const result = parse(await call(all ? {} : { courseId: COURSE_A.Id }));
+    const row = all ? result.courses[0].grades[0] : result.grades[0];
+    expect(row).toMatchObject({ comments: "**Good** reasoning.", feedbackStatus: "retrieved", gradeObjectId: "Quiz" });
+    expect(row.feedbackUrl).toContain("ou=101");
+    expect(row.feedbackStatusNote).toBeUndefined();
+  });
+
+  it("does not confuse absent public comments with absent published feedback or expose private comments", async () => {
+    const { call } = setup(() => [{ ...grade("Quiz"), PrivateComments: { Text: "private", Html: "<p>private</p>" } }]);
+    const result = parse(await call({ courseId: COURSE_A.Id }));
+    expect(result.grades[0]).toMatchObject({ comments: null, feedbackStatus: "unavailable" });
+    expect(result.grades[0].feedbackStatusNote).toContain("do not interpret null as no feedback");
+    expect(JSON.stringify(result)).not.toContain("private");
   });
 });

@@ -20,6 +20,7 @@ import {
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { gradebookUrl } from "../utils/deep-links.js";
+import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
 import type { AppConfig } from "../types/index.js";
 
 interface GradeValue {
@@ -49,6 +50,18 @@ interface EnrollmentItem {
     StartDate: string | null;
     EndDate: string | null;
     LastAccessed: string | null;
+  };
+}
+
+/** A missing public API comment does not establish whether UI feedback exists. */
+function publicComments(gv: GradeValue, baseUrl: string, courseId: number) {
+  const comments = feedbackText(gv.Comments);
+  return {
+    gradeObjectId: gv.GradeObjectIdentifier,
+    comments,
+    feedbackStatus: comments ? "retrieved" : "unavailable",
+    feedbackUrl: gradebookUrl(baseUrl, courseId),
+    ...(comments ? {} : { feedbackStatusNote: FEEDBACK_UNAVAILABLE_NOTE }),
   };
 }
 
@@ -127,7 +140,7 @@ export function registerGetMyGrades(
             pointsDenominator: gv.PointsDenominator,
             weightedNumerator: gv.WeightedNumerator,
             weightedDenominator: gv.WeightedDenominator,
-            comments: gv.Comments?.Text || null,
+            ...publicComments(gv, config.baseUrl, courseId),
             lastModified: gv.LastModified,
           }));
 
@@ -184,7 +197,7 @@ export function registerGetMyGrades(
               pointsDenominator: gv.PointsDenominator,
               weightedNumerator: gv.WeightedNumerator,
               weightedDenominator: gv.WeightedDenominator,
-              comments: gv.Comments?.Text || null,
+              ...publicComments(gv, config.baseUrl, item.OrgUnit.Id),
               lastModified: gv.LastModified,
             }));
 

@@ -14,6 +14,8 @@ import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { assignmentUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { dueIn } from "../utils/due-in.js";
+import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
+import { toOutputAssessment, type RubricAssessmentDto, type RubricDto } from "./get-assignment-rubric.js";
 import type { AppConfig } from "../types/index.js";
 
 // D2L Dropbox API types
@@ -69,7 +71,7 @@ interface DropboxSubmission {
 interface DropboxFeedback {
   Score: number | null;
   Feedback: { Text: string; Html: string } | null;
-  RubricAssessments: any[];
+  RubricAssessments?: RubricAssessmentDto[];
 }
 
 // D2L Quiz API types
@@ -335,14 +337,19 @@ export async function fetchCourseAssignments(
 
       // Fetch feedback independently of submissions
       let feedback: DropboxFeedback | null = null;
+      let feedbackStatus: "retrieved" | "unavailable" | "restricted" | "error" = "unavailable";
       try {
         feedback = await apiClient.get<DropboxFeedback>(
           apiClient.le(courseId, `/dropbox/folders/${folder.Id}/feedback/myFeedback/`),
           { ttl: DEFAULT_CACHE_TTLS.assignments }
         );
+        feedbackStatus = feedback ? "retrieved" : "unavailable";
       } catch (error: any) {
         if (isAuthUnavailable(error)) throw error;
-        // 404/403 means no feedback available (or no access) - that's fine
+        // Permission failures, missing API records, and transport failures
+        // do not establish whether published feedback exists in the UI.
+        feedbackStatus = error?.status === 403 ? "restricted"
+          : error?.status === 404 ? "unavailable" : "error";
         if (error?.status !== 404 && error?.status !== 403) {
           log("DEBUG", `Failed to fetch feedback for folder ${folder.Id}`, error);
         }
@@ -360,6 +367,16 @@ export async function fetchCourseAssignments(
         .map((l) => ({ name: l.LinkName ?? l.Title ?? l.Href ?? null, url: l.Href }));
 
       // Build assignment object
+      const overallFeedback = feedbackText(feedback?.Feedback);
+      const rubricAssessments = (feedback?.RubricAssessments ?? []).map((assessment) => {
+        const rubric = folder.Assessment?.Rubrics?.find((r) => r.RubricId === assessment.RubricId);
+        return {
+          rubricId: assessment.RubricId,
+          ...toOutputAssessment((rubric ?? { RubricId: assessment.RubricId, Name: "" }) as RubricDto, assessment),
+        };
+      });
+      const commentsRetrieved = Boolean(overallFeedback || rubricAssessments.some((rubric) =>
+        rubric.feedback || rubric.criteria.some((criterion) => criterion.feedback)));
       const assignment = {
         type: "assignment",
         id: folder.Id,
@@ -412,11 +429,14 @@ export async function fetchCourseAssignments(
         feedback: feedback
           ? {
               score: feedback.Score,
-              feedback: feedback.Feedback?.Html
-                ? convertHtmlToMarkdown(feedback.Feedback.Html).markdown
-                : null,
+              feedback: overallFeedback,
+              rubricAssessments,
             }
           : null,
+        feedbackStatus,
+        feedbackCommentsStatus: commentsRetrieved ? "retrieved" : "unavailable",
+        feedbackUrl: baseUrl ? gradebookUrl(baseUrl, courseId) : null,
+        ...(commentsRetrieved ? {} : { feedbackStatusNote: FEEDBACK_UNAVAILABLE_NOTE }),
       };
 
       assignments.push(assignment);
