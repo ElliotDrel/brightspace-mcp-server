@@ -46,7 +46,8 @@ export const GetMyGradesSchema = z.object({
 
 export const GetAnnouncementsSchema = z.object({
   courseId: z.coerce.number().int().positive().optional().describe("Course ID to get announcements for. If omitted, returns recent announcements across all courses."),
-  count: z.coerce.number().int().min(1).max(50).default(10).describe("Maximum number of announcements to return"),
+  count: z.coerce.number().int().min(1).max(50).default(10).describe("Announcements per page: 1-50 (default 10)."),
+  offset: z.coerce.number().int().min(0).default(0).describe("Announcement offset after filtering and sorting. Continue with pagination.nextOffset; restart at 0 after a failed course becomes available."),
   modifiedSince: z.string().datetime({ offset: true, message: "modifiedSince must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
     .describe("Only return announcements last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z). Announcements with no modified timestamp are always included. When set, the response reports how many announcements were filtered out."),
 });
@@ -143,7 +144,7 @@ export const GetVideoTranscriptSchema = z.object({
   offset: z.coerce.number().int().min(0).default(0)
     .describe("Character offset into the transcript to resume from. Pass back nextOffset from a truncated response to fetch the next piece."),
   maxChars: z.coerce.number().int().positive().max(100000).default(12000)
-    .describe("Maximum characters of transcript text to return in one call. The response reports whether it was truncated."),
+    .describe("Characters per page: 1-100000 (default 12000). Continue with nextOffset while truncated is true."),
 });
 
 export const GetRosterSchema = z.object({
