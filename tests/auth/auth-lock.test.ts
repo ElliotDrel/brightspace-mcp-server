@@ -121,7 +121,8 @@ describe("process-shared authentication lock", () => {
     await fs.mkdir(claimPath);
     await fs.writeFile(path.join(claimPath, "owner.json"), metadata);
     await (await acquireProcessLock(testLockPath))();
-  });
+  // Budget the bounded child startup and shutdown plus filesystem recovery.
+  }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 1_000);
 });
 
 describe("explicit takeover of a live automatic owner", () => {

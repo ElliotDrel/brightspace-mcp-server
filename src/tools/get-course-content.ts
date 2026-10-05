@@ -183,7 +183,9 @@ export async function buildContentTree(
           type: 'module',
           id: item.Id,
           title: item.Title,
-          description: item.Description?.Text ?? null,
+          description: item.Description?.Html?.trim()
+            ? convertHtmlToMarkdown(item.Description.Html).markdown
+            : item.Description?.Text ?? null,
           ...(item.ModuleDueDate ? { dueDate: item.ModuleDueDate } : {}),
           ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
           ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
