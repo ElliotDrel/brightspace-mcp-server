@@ -28,9 +28,10 @@ function trimBaseUrl(baseUrl: string): string {
 export function assignmentUrl(
   baseUrl: string,
   courseId: number,
-  folderId: number
+  folderId: number,
+  groupId: number = 0
 ): string {
-  return `${trimBaseUrl(baseUrl)}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${folderId}&grpid=0&ou=${courseId}`;
+  return `${trimBaseUrl(baseUrl)}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${folderId}&grpid=${groupId}&ou=${courseId}`;
 }
 
 /** Link to the summary page of a quiz. */

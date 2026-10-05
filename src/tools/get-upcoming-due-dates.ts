@@ -11,13 +11,15 @@ import {
 } from "./schemas.js";
 import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { assignmentUrl, quizUrl, discussionUrl } from "../utils/deep-links.js";
+import { quizUrl, discussionUrl } from "../utils/deep-links.js";
+import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
 import { resolveCourses, type CourseRef } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents, type CalendarEvent } from "./calendar-events.js";
 
 interface DropboxFolder {
+  GroupTypeId?: number | null;
   Id: number;
   Name: string;
   DueDate: string | null;
@@ -169,11 +171,13 @@ async function fetchCourseDueItems(
   }
 
   const items: UpcomingItem[] = [];
+  const assignmentLink = assignmentLinkResolver(apiClient, baseUrl, course.id);
 
   if (dropboxResult.status === "fulfilled") {
     for (const folder of unwrapList<DropboxFolder>(dropboxResult.value)) {
       if (folder.IsHidden === true) continue;
       if (!folder.DueDate) continue;
+      const link = await assignmentLink(folder);
 
       items.push({
         type: "assignment",
@@ -185,7 +189,8 @@ async function fetchCourseDueItems(
         dueIn: dueIn(folder.DueDate),
         startDate: null,
         endDate: null,
-        url: assignmentUrl(baseUrl, course.id, folder.Id),
+        ...link,
+        url: link.url!,
       });
     }
   } else {

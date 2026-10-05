@@ -12,7 +12,8 @@ import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } fro
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
-import { assignmentUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
+import { gradebookUrl, quizUrl } from "../utils/deep-links.js";
+import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
 
@@ -51,7 +52,7 @@ interface DropboxFolder {
       }>;
     }>;
   } | null;
-  GroupTypeId: number | null; // null = individual, non-null = group
+  GroupTypeId?: number | null; // absent/null = individual, non-null = group category
   SubmissionType: number | null;
   // Instructor-provided URL links attached to the folder (e.g. a spec doc
   // hosted elsewhere, a starter repo). Absent on tenants/folders with none.
@@ -272,6 +273,7 @@ export async function fetchCourseAssignments(
   baseUrl?: string
 ): Promise<any[]> {
   const assignments: any[] = [];
+  const assignmentLink = assignmentLinkResolver(apiClient, baseUrl, courseId);
 
   // Fetch dropbox folders, quizzes, and the gradebook in parallel. The
   // gradebook is fetched alongside them but read last: a heads-up row is a
@@ -364,14 +366,14 @@ export async function fetchCourseAssignments(
         type: "assignment",
         id: folder.Id,
         name: folder.Name,
-        url: baseUrl ? assignmentUrl(baseUrl, courseId, folder.Id) : null,
+        ...await assignmentLink(folder),
         instructions: folder.CustomInstructions?.Html
           ? convertHtmlToMarkdown(folder.CustomInstructions.Html).markdown
           : "",
         dueDate: folder.DueDate,
         dueIn: dueIn(folder.DueDate),
         points: folder.Assessment?.ScoreDenominator ?? null,
-        isGroup: folder.GroupTypeId !== null,
+        isGroup: folder.GroupTypeId !== null && folder.GroupTypeId !== undefined,
         ...(linkAttachments.length > 0 ? { linkAttachments } : {}),
         rubric: folder.Assessment?.Rubrics?.map((r) => ({
           name: r.Name,

@@ -13,7 +13,7 @@ import {
   readAttachment,
   type D2LFileAttachment,
 } from "./attachment-reader.js";
-import { assignmentUrl } from "../utils/deep-links.js";
+import { assignmentLinkResolver } from "./assignment-links.js";
 import { log } from "../utils/logger.js";
 
 export { fileKind } from "./attachment-reader.js";
@@ -30,6 +30,7 @@ export { fileKind } from "./attachment-reader.js";
  */
 
 interface DropboxFolder {
+  GroupTypeId?: number | null;
   Id: number;
   Name: string;
   DueDate: string | null;
@@ -76,6 +77,7 @@ export function registerGetAssignmentFiles(
           GetAssignmentFilesSchema.parse(args);
 
         const folders = await listFolders(apiClient, courseId, folderId);
+        const assignmentLink = assignmentLinkResolver(apiClient, baseUrl, courseId);
 
         if (folderId !== undefined && folders.length === 0) {
           return toolResponse({
@@ -116,24 +118,24 @@ export function registerGetAssignmentFiles(
             courseId,
             folderId,
             folderName: folder.Name,
-            url: baseUrl ? assignmentUrl(baseUrl, courseId, folderId) : null,
+            ...await assignmentLink(folder),
             file,
           });
         }
 
         // Discovery: which assignments have files, without downloading any.
-        const withFiles = folders
+        const withFiles = await Promise.all(folders
           .filter((folder) => (folder.Attachments ?? []).length > 0)
-          .map((folder) => ({
+          .map(async (folder) => ({
             folderId: folder.Id,
             folderName: folder.Name,
             dueDate: folder.DueDate,
-            url: baseUrl ? assignmentUrl(baseUrl, courseId, folder.Id) : null,
+            ...await assignmentLink(folder),
             attachments: (folder.Attachments ?? []).map((attachment) => ({
               ...describeAttachment(attachment),
               downloadArgs: { courseId, folderId: folder.Id, fileId: attachment.FileId, source: "assignmentAttachment" },
             })),
-          }));
+          })));
 
         log(
           "INFO",
