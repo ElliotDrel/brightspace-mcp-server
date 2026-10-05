@@ -32,6 +32,7 @@ const folder = (
   Name: name,
   DueDate: "2026-09-30T03:59:00.000Z",
   IsHidden: false,
+  GroupTypeId: null,
   Attachments: attachments,
   ...extra,
 });
@@ -146,6 +147,7 @@ describe("get_assignment_files discovery", () => {
       fileName: "spec.pdf",
       size: 2048,
       kind: "pdf",
+      downloadArgs: { courseId: COURSE, folderId: 1, fileId: 11, source: "assignmentAttachment" },
     });
     expect(payload.assignments[1].attachments.map((a: any) => a.kind)).toEqual(["xlsx", "docx"]);
     expect(rawRequested).toEqual([]);

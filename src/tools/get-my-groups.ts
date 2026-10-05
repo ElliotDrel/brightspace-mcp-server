@@ -5,29 +5,13 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { D2LApiClient } from "../api/index.js";
 import { ApiError } from "../api/errors.js";
 import { GetMyGroupsSchema } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { fetchClasslistUsers, type ClasslistUser } from "./get-roster.js";
 import { log } from "../utils/logger.js";
-
-interface WhoAmIResponse {
-  Identifier: number | string;
-  DisplayName?: string;
-}
-
-interface GroupCategoryDto {
-  GroupCategoryId: number;
-  Name: string;
-}
-
-interface GroupDto {
-  GroupId: number;
-  Name: string;
-  Code?: string | null;
-  Enrollments?: number[] | null;
-}
+import { fetchMyGroupMemberships } from "./group-membership.js";
 
 interface GroupMember {
   userId: number;
@@ -70,56 +54,13 @@ export function registerGetMyGroups(
 
         const { courseId } = GetMyGroupsSchema.parse(args);
 
-        const me = await apiClient.get<WhoAmIResponse>(apiClient.lp("/users/whoami"));
-        const myId = Number(me.Identifier);
-
-        let categories: GroupCategoryDto[];
-        try {
-          categories = await apiClient.get<GroupCategoryDto[]>(
-            apiClient.lp(`/${courseId}/groupcategories/`),
-            { ttl: DEFAULT_CACHE_TTLS.roster }
-          );
-        } catch (error) {
-          if (isMissingOrForbidden(error)) {
-            log("INFO", "get_my_groups: No group categories visible for course", { courseId });
-            return toolResponse({
-              courseId,
-              groups: [],
-              note: "No groups are visible for this course (it may not use groups, or group info isn't accessible).",
-            });
-          }
-          throw error;
-        }
-
-        // Membership is determined first, from GroupDto.Enrollments alone —
-        // no classlist needed for that. The classlist (for member names) is
-        // fetched lazily, only once we know the user is actually in at least
-        // one group, so a user in no groups never pays for a roster fetch.
-        const matches: { category: GroupCategoryDto; group: GroupDto }[] = [];
-
-        for (const category of categories) {
-          let categoryGroups: GroupDto[];
-          try {
-            categoryGroups = await apiClient.get<GroupDto[]>(
-              apiClient.lp(`/${courseId}/groupcategories/${category.GroupCategoryId}/groups/`),
-              { ttl: DEFAULT_CACHE_TTLS.roster }
-            );
-          } catch (error) {
-            if (isMissingOrForbidden(error)) {
-              log("WARN", "get_my_groups: Groups not accessible for category, skipping", {
-                courseId,
-                categoryId: category.GroupCategoryId,
-              });
-              continue;
-            }
-            throw error;
-          }
-
-          for (const group of categoryGroups) {
-            const enrollments = group.Enrollments ?? [];
-            if (!enrollments.includes(myId)) continue;
-            matches.push({ category, group });
-          }
+        const { matches, categoriesUnavailable } = await fetchMyGroupMemberships(apiClient, courseId);
+        if (categoriesUnavailable) {
+          return toolResponse({
+            courseId,
+            groups: [],
+            note: "No groups are visible for this course (it may not use groups, or group info isn't accessible).",
+          });
         }
 
         if (matches.length === 0) {

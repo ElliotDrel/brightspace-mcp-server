@@ -9,7 +9,7 @@ import { registerGetAnnouncements } from "../../src/tools/get-announcements.js";
  * asked for 100, and was refused by validation that caps it at 50. The cap has
  * to be in the schema the client actually receives from tools/list, and the
  * description has to say what to do when a course has more than the cap,
- * because there is no offset to page with.
+ * using offset and the returned continuation metadata.
  */
 
 let countSchema: Record<string, unknown>;
@@ -41,7 +41,8 @@ describe("get_announcements exposed schema (#148)", () => {
 
   it("tells the caller how to reach announcements beyond the cap", () => {
     const text = `${countSchema.description} ${toolDescription}`;
-    expect(text).toMatch(/no pagination|not paginated|no offset/i);
+    expect(text).toMatch(/offset/i);
+    expect(text).toMatch(/nextOffset/i);
     expect(text).toMatch(/modifiedSince/);
     expect(text).toMatch(/courseId/);
   });
