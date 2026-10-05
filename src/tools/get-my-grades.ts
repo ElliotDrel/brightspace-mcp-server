@@ -20,6 +20,7 @@ import {
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { gradebookUrl, quizUrl } from "../utils/deep-links.js";
+import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
 import type { AppConfig } from "../types/index.js";
 
 interface GradeValue {
@@ -71,8 +72,8 @@ async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<
 }
 
 /**
- * Clean grade rows. Rows scored from a quiz also carry feedbackUrl, and a
- * feedbackNote when the gradebook comment is empty; other rows are unchanged.
+ * Normalize public comments and report their retrieval status. Quiz-linked
+ * rows keep the quiz source URL and note; other rows link to the gradebook.
  */
 function toGradeItems(
   gradeValues: GradeValue[],
@@ -86,7 +87,7 @@ function toGradeItems(
       .map((q) => [String(q.GradeItemId), q.QuizId])
   );
   return gradeValues.map((gv) => {
-    const comments = gv.Comments?.Text || null;
+    const comments = feedbackText(gv.Comments);
     const quizId = quizByGradeItem.get(String(gv.GradeObjectIdentifier));
     return {
       name: gv.GradeObjectName,
@@ -95,12 +96,13 @@ function toGradeItems(
       pointsDenominator: gv.PointsDenominator,
       weightedNumerator: gv.WeightedNumerator,
       weightedDenominator: gv.WeightedDenominator,
+      gradeObjectId: gv.GradeObjectIdentifier,
       comments,
+      feedbackStatus: comments ? "retrieved" : "unavailable",
+      feedbackUrl: quizId === undefined ? gradebookUrl(baseUrl, courseId) : quizUrl(baseUrl, courseId, quizId),
+      ...(comments ? {} : { feedbackStatusNote: FEEDBACK_UNAVAILABLE_NOTE }),
       lastModified: gv.LastModified,
-      ...(quizId === undefined ? {} : {
-        feedbackUrl: quizUrl(baseUrl, courseId, quizId),
-        ...(comments ? {} : { feedbackNote: QUIZ_FEEDBACK_NOTE }),
-      }),
+      ...(quizId !== undefined && !comments ? { feedbackNote: QUIZ_FEEDBACK_NOTE } : {}),
     };
   });
 }

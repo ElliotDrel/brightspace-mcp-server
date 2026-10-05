@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetAssignmentRubricSchema } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
-import { convertHtmlToMarkdown } from "../utils/html-converter.js";
+import { feedbackText } from "../utils/feedback.js";
 import { log } from "../utils/logger.js";
 
 // D2L rubric API types. Two shapes are read because tenants disagree on
@@ -59,7 +59,7 @@ interface RubricCriteriaGroupDto {
   Criteria?: RubricCriterionDto[];
 }
 
-interface RubricDto {
+export interface RubricDto {
   RubricId: number;
   Name: string;
   Description?: RichText | null;
@@ -83,7 +83,7 @@ interface RubricAssessmentOutcomeDto {
   Feedback?: RichText | null;
 }
 
-interface RubricAssessmentDto {
+export interface RubricAssessmentDto {
   RubricId: number;
   // The documented Dropbox myFeedback shape (D2L's "RubricAssessment" block)
   // carries the overall outcome as three flat fields rather than a nested
@@ -168,9 +168,7 @@ export interface GetAssignmentRubricResult {
 
 /** Rich text to plain markdown, or undefined when there is nothing to say. */
 function textOf(rt?: RichText | null): string | undefined {
-  if (!rt) return undefined;
-  const text = rt.Html ? convertHtmlToMarkdown(rt.Html).markdown : rt.Text ?? undefined;
-  return text && text.trim().length > 0 ? text : undefined;
+  return feedbackText(rt) ?? undefined;
 }
 
 /** The groups a rubric carries, normalizing the grouped and flattened shapes. */
@@ -268,7 +266,7 @@ function levelNamesOf(rubric: RubricDto): Map<number, string> {
  * The student's own graded outcome on this rubric, resolved against the
  * rubric's own criterion/level names rather than re-sent by the assessment.
  */
-function toOutputAssessment(
+export function toOutputAssessment(
   rubric: RubricDto,
   assessment: RubricAssessmentDto
 ): OutputAssessment {

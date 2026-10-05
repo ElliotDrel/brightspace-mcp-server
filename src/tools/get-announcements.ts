@@ -16,6 +16,20 @@ import { applyCourseFilter } from "../utils/course-filter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import type { AppConfig } from "../types/index.js";
 
+function pageInfo(offset: number, count: number, returned: number, total: number | null, unavailableCourseIds: number[] = []) {
+  const nextOffset = total !== null && offset + returned < total ? offset + returned : null;
+  return { offset, count, returned, total, nextOffset, truncated: nextOffset !== null,
+    coverageComplete: total !== null && unavailableCourseIds.length === 0, unavailableCourseIds };
+}
+
+// Preserve the original array in content[0] and existing auth notices, while
+// exposing machine-readable continuation metadata in a separate text block.
+function arrayPage(items: unknown[], pagination: ReturnType<typeof pageInfo>, notice?: string) {
+  const result = notice ? toolResponseWithNotice(items, notice) : toolResponse(items);
+  result.content.push({ type: "text", text: JSON.stringify({ pagination }) });
+  return result;
+}
+
 export interface NewsItem {
   Id: number;
   Title: string;
@@ -140,7 +154,7 @@ export function registerGetAnnouncements(
     {
       title: "Get Announcements",
       description:
-        "Fetch recent announcements from your courses. Can filter to a specific course or get announcements across all courses. Use this when the user asks about announcements, news, updates from instructors, recent posts, or what professors said. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
+        "Fetch announcements from one course with courseId, or all courses when omitted, newest first. count is 1-50 per page. Continue with offset= pagination.nextOffset until it is null. Pagination metadata is in a separate JSON text block for array responses, or the pagination field with modifiedSince. A false coverageComplete means some courses were not fetched: retry from offset 0 after recovery. Offsets reflect the current filtered list; new posts can shift pages. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
       inputSchema: GetAnnouncementsSchema,
     },
     async (args: any) => {
@@ -148,7 +162,7 @@ export function registerGetAnnouncements(
         log("DEBUG", "get_announcements tool called", { args });
 
         // Parse and validate input
-        const { courseId, count, modifiedSince } = GetAnnouncementsSchema.parse(args);
+        const { courseId, count, offset, modifiedSince } = GetAnnouncementsSchema.parse(args);
         const cutoff = modifiedSince ? new Date(modifiedSince) : null;
 
         // Single course case
@@ -161,22 +175,22 @@ export function registerGetAnnouncements(
             const matched = cutoff
               ? published.filter((a) => matchesModifiedSince(a.lastModified, cutoff))
               : published;
-            const announcements = matched.sort(newestFirst).slice(0, count);
+            const announcements = matched.sort(newestFirst).slice(offset, offset + count);
+            const pagination = pageInfo(offset, count, announcements.length, matched.length);
 
             log(
               "INFO",
               `get_announcements: Retrieved ${announcements.length} announcements for course ${courseId}`
             );
-            return toolResponse(
-              modifiedSince
-                ? {
+            return modifiedSince
+                ? toolResponse({
                     announcements,
+                    pagination,
                     modifiedSince,
                     returned: announcements.length,
                     filteredOut: published.length - matched.length,
-                  }
-                : announcements
-            );
+                  })
+                : arrayPage(announcements, pagination);
           } catch (error) {
             // A pending sign-in is not an empty course: the route never
             // answered, so the result says so instead of reporting zero
@@ -200,10 +214,11 @@ export function registerGetAnnouncements(
                   returned: 0,
                   filteredOut: 0,
                   authPending: true,
+                  pagination: pageInfo(offset, count, 0, null, [courseId]),
                   notice,
                 });
               }
-              return toolResponseWithNotice([], notice);
+              return arrayPage([], pageInfo(offset, count, 0, null, [courseId]), notice);
             }
             throw error;
           }
@@ -262,7 +277,7 @@ export function registerGetAnnouncements(
                   "DEBUG",
                   `get_announcements: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - skipping`
                 );
-                return [];
+                return { unavailable: true as const, courseId: item.OrgUnit.Id };
               }
               // A pending sign-in only means this course's route never
               // answered — it says nothing about the other courses, whose
@@ -293,6 +308,10 @@ export function registerGetAnnouncements(
             !Array.isArray(v) && v?.authPending === true
         );
         const allAnnouncements = settled.filter((v): v is any[] => Array.isArray(v)).flat();
+        const unavailableCourseIds = results.flatMap((result, index) =>
+          result.status === "rejected" || (!Array.isArray(result.value) && result.value?.courseId)
+            ? [filteredEnrollments[index].OrgUnit.Id] : []
+        );
 
         const allMatched = cutoff
           ? allAnnouncements.filter((a) => matchesModifiedSince(a.lastModified, cutoff))
@@ -301,7 +320,8 @@ export function registerGetAnnouncements(
         // Sort by the scheduled date and slice to count
         const announcements = allMatched
           .sort(newestFirst)
-          .slice(0, count);
+          .slice(offset, offset + count);
+        const pagination = pageInfo(offset, count, announcements.length, allMatched.length, unavailableCourseIds);
 
         log(
           "INFO",
@@ -316,9 +336,9 @@ export function registerGetAnnouncements(
         // caller — so a pending course adds a second content block carrying
         // the notice instead of changing content[0].
         if (!modifiedSince) {
-          if (pending.length === 0) return toolResponse(announcements);
-          return toolResponseWithNotice(
-            announcements,
+          if (pending.length === 0) return arrayPage(announcements, pagination);
+          return arrayPage(
+            announcements, pagination,
             "Sign-in to Brightspace is still in progress, so announcements for " +
               `${pending.length} course(s) (${pending.map((c) => c.courseId).join(", ")}) could not be ` +
               `fetched yet. ${authPendingNotice(pending[0].authError)} Call get_announcements again once ` +
@@ -328,6 +348,7 @@ export function registerGetAnnouncements(
 
         const response: Record<string, unknown> = {
           announcements,
+          pagination,
           modifiedSince,
           returned: announcements.length,
           filteredOut: allAnnouncements.length - allMatched.length,
@@ -348,3 +369,4 @@ export function registerGetAnnouncements(
     }
   );
 }
+

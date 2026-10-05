@@ -244,7 +244,7 @@ describe("get_my_grades grade-restricted courses", () => {
 
     const payload = parse(await call({}));
 
-    expect(payload.courses).toEqual([
+    expect(payload.courses).toMatchObject([
       { courseId: COURSE_B.Id, courseName: COURSE_B.Name, grades: [grade("Quiz 2")].map((gv) => ({
         name: gv.GradeObjectName,
         displayGrade: gv.DisplayedGrade,
@@ -300,7 +300,7 @@ describe("get_my_grades grade-restricted courses", () => {
  * quiz's own submissions page may hold it, sometimes behind a restricted viewer
  * such as Respondus LockDown Browser. The student API cannot read that
  * feedback, so a null `comments` on such a row must not read as "no feedback".
- * Quiz-linked rows say where the feedback lives; every other row is unchanged.
+ * Quiz-linked rows keep their quiz source; other rows use the gradebook source.
  */
 describe("get_my_grades quiz feedback source", () => {
   const QUIZ = { QuizId: 77, Name: "Midterm", GradeItemId: 5001, IsActive: true };
@@ -347,12 +347,21 @@ describe("get_my_grades quiz feedback source", () => {
     expect(row.feedbackUrl).toBe(quizUrl);
   });
 
-  it("leaves a grade with no linked quiz unchanged", async () => {
+  it("keeps a gradebook source when no quiz is linked", async () => {
     const { call } = setup(respond([grade("Homework 1")]));
 
     const [row] = parse(await call({ courseId: COURSE_A.Id })).grades;
 
-    expect(Object.keys(row)).not.toContain("feedbackUrl");
+    expect(row.feedbackUrl).toBe("https://brightspace.example.edu/d2l/lms/grades/my_grades/main.d2l?ou=101");
+    expect(row.feedbackNote).toBeUndefined();
+  });
+
+  it("keeps quiz sources and normalized HTML comments together", async () => {
+    const { call } = setup(respond([{ ...quizGrade, Comments: { Text: "", Html: "<p><strong>Good</strong> evidence</p>" } }]));
+    const [row] = parse(await call({ courseId: COURSE_A.Id })).grades;
+    expect(row).toMatchObject({ comments: "**Good** evidence", feedbackUrl: quizUrl, feedbackStatus: "retrieved", gradeObjectId: "5001" });
+    expect(row.feedbackNote).toBeUndefined();
+    expect(row.feedbackStatusNote).toBeUndefined();
   });
 
   it("still returns grades when the quiz list is refused", async () => {
@@ -364,5 +373,26 @@ describe("get_my_grades quiz feedback source", () => {
     const payload = parse(await call({ courseId: COURSE_A.Id }));
 
     expect(payload.grades.map((g: { name: string }) => g.name)).toEqual(["Midterm"]);
+  });
+});
+
+describe("get_my_grades public instructor feedback", () => {
+  it.each([false, true])("preserves HTML comments in single/all courses (all=%s)", async (all) => {
+    const { call } = setup((path) => path.includes("/enrollments/")
+      ? enrollmentPage(COURSE_A, true)
+      : [{ ...grade("Quiz"), Comments: { Text: "", Html: "<p><strong>Good</strong> reasoning.</p>" } }]);
+    const result = parse(await call(all ? {} : { courseId: COURSE_A.Id }));
+    const row = all ? result.courses[0].grades[0] : result.grades[0];
+    expect(row).toMatchObject({ comments: "**Good** reasoning.", feedbackStatus: "retrieved", gradeObjectId: "Quiz" });
+    expect(row.feedbackUrl).toContain("ou=101");
+    expect(row.feedbackStatusNote).toBeUndefined();
+  });
+
+  it("does not confuse absent public comments with absent published feedback or expose private comments", async () => {
+    const { call } = setup(() => [{ ...grade("Quiz"), PrivateComments: { Text: "private", Html: "<p>private</p>" } }]);
+    const result = parse(await call({ courseId: COURSE_A.Id }));
+    expect(result.grades[0]).toMatchObject({ comments: null, feedbackStatus: "unavailable" });
+    expect(result.grades[0].feedbackStatusNote).toContain("do not interpret null as no feedback");
+    expect(JSON.stringify(result)).not.toContain("private");
   });
 });

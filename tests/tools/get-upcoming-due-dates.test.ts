@@ -224,7 +224,7 @@ describe("get_upcoming_due_dates", () => {
     const { call } = setup((path) => {
       if (path.includes("/enrollments/")) return enrollments(COURSE_A);
       if (path.includes("/dropbox/folders/")) {
-        return [{ Id: 55, Name: "HW", DueDate: daysFromNow(1), IsHidden: false }];
+        return [{ Id: 55, Name: "HW", DueDate: daysFromNow(1), IsHidden: false, GroupTypeId: null }];
       }
       if (path.includes("/quizzes/")) {
         return [{ QuizId: 66, Name: "Q", StartDate: null, EndDate: null, DueDate: daysFromNow(2), IsActive: true }];

@@ -6,12 +6,12 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "3.11.4-purdue.1",
+  "version": "3.11.10-purdue.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "3.11.4-purdue.1",
+      "version": "3.11.10-purdue.1",
       "transport": {
         "type": "stdio"
       },
