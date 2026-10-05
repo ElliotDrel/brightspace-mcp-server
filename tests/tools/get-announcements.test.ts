@@ -90,6 +90,72 @@ const manyCourses = (byCourse: Record<number, unknown[]>): Responder => (path) =
   return match ? byCourse[Number(match[1])] ?? [] : [];
 };
 
+const pagination = (result: any) => result.content
+  .filter((item: any) => item.type === "text" && item.text.startsWith('{"pagination":'))
+  .map((item: any) => JSON.parse(item.text).pagination)[0];
+
+describe("announcement continuation", () => {
+  const posts = Array.from({ length: 61 }, (_, index) => news({
+    Id: index + 1, StartDate: new Date(Date.UTC(2026, 8, index + 1)).toISOString(),
+    LastModifiedDate: new Date(Date.UTC(2026, 8, index + 1)).toISOString(),
+  }));
+
+  it("archives more than 50 posts without changing the array response", async () => {
+    const { call } = setup(oneCourse(posts));
+    const first = await call({ courseId: COURSE_A.Id, count: 50 });
+    expect(parse(first).map((item) => item.id)).toEqual(Array.from({ length: 50 }, (_, i) => 61 - i));
+    expect(pagination(first)).toMatchObject({ offset: 0, total: 61, returned: 50, nextOffset: 50, truncated: true, coverageComplete: true });
+    const second = await call({ courseId: COURSE_A.Id, count: 50, offset: pagination(first).nextOffset });
+    expect(parse(second).map((item) => item.id)).toEqual(Array.from({ length: 11 }, (_, i) => 11 - i));
+    expect(pagination(second)).toMatchObject({ total: 61, returned: 11, nextOffset: null, truncated: false });
+    const beyond = await call({ courseId: COURSE_A.Id, offset: 100 });
+    expect(parse(beyond)).toEqual([]);
+    expect(pagination(beyond).nextOffset).toBeNull();
+  });
+
+  it("applies offsets after modified-date filtering", async () => {
+    const { call } = setup(oneCourse(posts));
+    const result = await call({ courseId: COURSE_A.Id, count: 5, offset: 5, modifiedSince: "2026-10-01T00:00:00Z" });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.announcements.map((item: any) => item.id)).toEqual([56, 55, 54, 53, 52]);
+    expect(data.pagination).toMatchObject({ total: 31, nextOffset: 10, coverageComplete: true });
+    expect(data.filteredOut).toBe(30);
+  });
+
+  it("pages across the globally sorted course results", async () => {
+    const { call } = setup(manyCourses({ [COURSE_A.Id]: posts.slice(0, 30), [COURSE_B.Id]: posts.slice(30) }));
+    const result = await call({ count: 5, offset: 29 });
+    expect(parse(result).map((item) => item.id)).toEqual([32, 31, 30, 29, 28]);
+    expect(pagination(result)).toMatchObject({ total: 61, nextOffset: 34, coverageComplete: true });
+  });
+
+  it.each([() => mfaPending(), () => Object.assign(new Error("Forbidden"), { status: 403 }), () => new Error("Network unavailable")])(
+    "does not mark incomplete course coverage complete", async (failure) => {
+      const { call } = setup((path) => {
+        if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+        if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw failure();
+        return posts;
+      });
+      const result = await call({ count: 50 });
+      expect(parse(result)).toHaveLength(50);
+      expect(pagination(result)).toMatchObject({ total: 61, nextOffset: 50, coverageComplete: false, unavailableCourseIds: [COURSE_B.Id] });
+    }
+  );
+
+  it("uses an unknown total when the sole course has not answered", async () => {
+    const { call } = setup(() => { throw mfaPending(); });
+    const result = await call({ courseId: COURSE_A.Id });
+    expect(result.content[1].text).toContain("Approve the sign-in request");
+    expect(pagination(result)).toMatchObject({ total: null, coverageComplete: false, unavailableCourseIds: [COURSE_A.Id] });
+  });
+
+  it.each([-1, 0.5])("rejects invalid offset %s", async (offset) => {
+    const { call, requested } = setup(oneCourse(posts));
+    expect((await call({ courseId: COURSE_A.Id, offset })).isError).toBe(true);
+    expect(requested).toEqual([]);
+  });
+});
+
 describe("get_announcements", () => {
   describe("unpublished drafts", () => {
     it("excludes an item with IsPublished false", async () => {

@@ -46,7 +46,8 @@ export const GetMyGradesSchema = z.object({
 
 export const GetAnnouncementsSchema = z.object({
   courseId: z.coerce.number().int().positive().optional().describe("Course ID to get announcements for. If omitted, returns recent announcements across all courses."),
-  count: z.coerce.number().int().min(1).max(50).default(10).describe("Maximum number of announcements to return, newest first (1-50, default 10). There is no pagination or offset: when more announcements exist than count, only the newest are returned. To get fuller coverage, call once per course with courseId so courses do not compete for the same slots, and use modifiedSince to return only announcements changed since a cutoff."),
+  count: z.coerce.number().int().min(1).max(50).default(10).describe("Announcements per page: 1-50 (default 10)."),
+  offset: z.coerce.number().int().min(0).default(0).describe("Announcement offset after filtering and sorting. Continue with pagination.nextOffset; restart at 0 after a failed course becomes available."),
   modifiedSince: z.string().datetime({ offset: true, message: "modifiedSince must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
     .describe("Only return announcements last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z). Announcements with no modified timestamp are always included. When set, the response reports how many announcements were filtered out."),
 });
@@ -75,14 +76,16 @@ export const GetClasslistEmailsSchema = z.object({
 });
 
 export const DownloadFileSchema = z.object({
+  source: z.enum(["submission", "assignmentAttachment"]).optional()
+    .describe("For folderId + fileId: assignmentAttachment downloads an instructor-provided handout from get_assignment_files; submission (default) downloads your own submitted file. Do not combine source with topicId or newsId."),
   courseId: z.coerce.number().int().positive()
     .describe("Course ID the file belongs to."),
   topicId: z.coerce.number().int().positive().optional()
     .describe("Content topic ID to download (for course content files)."),
   folderId: z.coerce.number().int().positive().optional()
-    .describe("Dropbox folder ID (for submission/feedback file downloads)."),
+    .describe("Dropbox folder ID. Downloads your submission by default; set source to assignmentAttachment for an instructor-provided handout."),
   fileId: z.coerce.number().int().positive().optional()
-    .describe("Specific file ID within a dropbox submission, or an announcement attachment's file ID (with newsId)."),
+    .describe("Specific file ID within a dropbox submission, instructor assignment attachment (with source: assignmentAttachment), or announcement attachment (with newsId)."),
   newsId: z.coerce.number().int().positive().optional()
     .describe("Announcement (news item) ID whose attachment to download. Requires fileId."),
   downloadPath: z.string().min(1).optional()
