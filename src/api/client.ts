@@ -62,6 +62,50 @@ function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
  * Braces are used because D2L paths never contain them, so a substitution can
  * never collide with a real path segment.
  */
+/**
+ * An abort signal that fires after `ms` without progress. Each touch() restarts
+ * the countdown, so a slow transfer that keeps moving is never cut off while a
+ * stalled one still fails.
+ */
+function idleTimeout(ms: number) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = () => clearTimeout(timer);
+  const touch = () => {
+    clear();
+    timer = setTimeout(
+      () => controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+      ms,
+    );
+  };
+  touch();
+  return { signal: controller.signal, touch, clear };
+}
+
+/** Restart the idle timer on every chunk of the body; stop it at the end. */
+function touchOnProgress(response: Response, idle: ReturnType<typeof idleTimeout>): Response {
+  if (!response.body) {
+    idle.clear();
+    return response;
+  }
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        idle.touch();
+        controller.enqueue(chunk);
+      },
+      flush() {
+        idle.clear();
+      },
+    }),
+  );
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 const LP_VERSION = "{lp}";
 const LE_VERSION = "{le}";
 
@@ -292,6 +336,26 @@ export class D2LApiClient {
     return this.withAuthentication(resolved, token => this.makeRawRequest(resolved, token));
   }
 
+  /**
+   * Fetch a Brightspace web page (not an API route) as the signed-in user.
+   * Pages check the session cookie and ignore a Bearer token, so this sends
+   * the stored cookie. Returns null when no cookie is stored or the page
+   * answers with the login redirect: it never starts a login, since a page
+   * read by a read-only tool is not worth an MFA prompt.
+   */
+  async getPage(path: string): Promise<string | null> {
+    const token = await this.tokenManager.getToken();
+    if (!token?.cookieHeader) return null;
+    const cookieToken: TokenData = { ...token, accessToken: `cookie:${token.cookieHeader}` };
+    try {
+      const response = await this.retrying(() => this.throttled(() => this.makeRawRequest(path, cookieToken)));
+      return await response.text();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return null;
+      throw error;
+    }
+  }
+
   /** One HTTP refresh and at most one browser login per caller. */
   private async withAuthentication<T>(path: string, request: (token: TokenData) => Promise<T>): Promise<T> {
     let token = await this.tokenManager.getToken();
@@ -480,6 +544,9 @@ export class D2LApiClient {
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
+    // A file can take far longer than timeoutMs to arrive. Time out on a
+    // stall rather than on total duration, for the headers and the body alike.
+    const idle = idleTimeout(this.timeoutMs);
 
     try {
       log("DEBUG", `Requesting GET ${path} (raw)`);
@@ -487,7 +554,7 @@ export class D2LApiClient {
       const response = await fetch(url, {
         method: "GET",
         headers,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: idle.signal,
       });
       this.recordStatus(response.status);
 
@@ -536,6 +603,7 @@ export class D2LApiClient {
         }
         // A legitimate HTML page: hand back an equivalent response with the
         // body we already consumed.
+        idle.clear();
         return new Response(body, {
           status: response.status,
           statusText: response.statusText,
@@ -544,8 +612,9 @@ export class D2LApiClient {
       }
 
       // Return raw response for caller to process
-      return response;
+      return touchOnProgress(response, idle);
     } catch (error) {
+      idle.clear();
       // Re-throw our own errors
       if (
         error instanceof ApiError ||
