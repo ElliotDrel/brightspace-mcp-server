@@ -70,12 +70,22 @@ npx -y brightspace-mcp-server@latest setup --javeriana
 The wizard:
 
 - prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, or `--javeriana`)
-- asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
+- asks how the user confirms sign-in: 1, a phone app (approval or a terminal code; Chromium stays hidden), or 2, another way such as a text message (`headless: false`: the sign-in page opens during `setup`/`auth` for the user to finish; automatic re-auth stays hidden regardless)
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
 - auto-configures Claude Desktop, Cursor, and Antigravity, and uses their own CLIs to configure Codex and Claude Code when detected; an existing `brightspace` entry that runs anything other than `npx -y brightspace-mcp-server@latest` is printed and replaced only if the user says yes
 
 Wait for the user to finish login and MFA before continuing.
+
+#### Handing the wizard to the user
+
+The wizard needs the user's own username, password, and MFA approval, which you must not type for them. Many users installing this are beginners who have never used a terminal, so the hand-off is where installs stall. Do it this way:
+
+- **Run it where the user can type.** That means a visible terminal they control: a terminal tab or panel your app shows them, or one they open themselves (Terminal on macOS, PowerShell on Windows). Never run it in a background shell, where the prompts can't reach them.
+- **Say exactly where it is and what to do first.** Name the place the way they see it ("the terminal panel on the right, titled *brightspace setup*"), and link it if your app supports that. Tell them to click inside it before typing, because keystrokes go to the chat box until they do. Tell them the first question is their username and to press Enter after each answer.
+- **Warn them about the password prompt.** Only asterisks appear as they type, and they still press Enter. Then the wizard asks how they approve sign-ins and waits for the MFA approval on their phone.
+- **Don't take "done" on faith.** Read the terminal yourself if you can. The wizard is finished only when it prints `Setup complete!`. If it is still on a prompt, tell the user which question it is waiting on and where to answer it. Don't just ask again whether they are done. Don't offer a one-click "I'm done" reply: a beginner will click it before they have typed anything.
+- **If typing in your panel doesn't work,** give them the one command to paste into their own terminal app, and say how to open that app.
 
 ### 3. Register the MCP server in the user's AI client
 
@@ -111,7 +121,7 @@ On a Duo tenant, a device-trust prompt ("Is this your device?") gating the push 
 
 On Microsoft Entra's MFA page (number match or verification code, on `login.microsoftonline.com` only), the "Don't ask again for N days" checkbox is ticked once when remember-MFA is on, before the number is announced or a code is asked for, and an already-checked box is left alone. Remember-MFA is `setup` option 2 or 3 (default: option 1, off) saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it either way (env > config.json > `false`). This is opt-in and off by default: unless it is turned on the box is left alone and the outcome is recorded as `off`. The window is the tenant's setting; a tenant that never shows the box simply keeps asking. A sign-in that fails after Entra renewed its cookies still saves the browser state when those cookies are strictly newer than the saved ones; any other failure leaves the saved state untouched. `get_server_info` reports `microsoftSession` — `staySignedIn`, `staySignedInExpires`, `rememberMfa` (`ticked`, `already`, `absent`, `unknown`, or `off`), `rememberMfaAt` — read from a plain summary (`microsoft-session.json`, no cookie values) beside the browser state, and omits it when no browser state is saved.
 
-Passwordless sign-in is a `setup` question (default no) saved as `passwordless` in `config.json`; `D2L_PASSWORDLESS` overrides it (env > config.json > `false`). When on, `loadConfig` reads no saved password and `setup` saves none (it deletes the account's existing credential-store entry); the default Entra flow counts a username alone as credentials, submits only the username, and waits on Microsoft's passwordless approval view (the "Use your password instead" link or `#idRemoteNGC_*` markers) as an MFA challenge instead of clicking through to the password page, announcing its number like number match. A password page in this mode fails at once with an error naming `D2L_PASSWORDLESS`. Every sign-in then needs a phone approval, so it is for interactive use only.
+Passwordless sign-in is shelved: `setup` no longer asks about it, always saves a password, and drops a `passwordless` value carried over in `config.json`. Only `D2L_PASSWORDLESS` (or a hand-edited `passwordless` in `config.json`) turns it on (env > config.json > `false`). When on, `loadConfig` reads no saved password; the default Entra flow counts a username alone as credentials, submits only the username, and waits on Microsoft's passwordless approval view (the "Use your password instead" link or `#idRemoteNGC_*` markers) as an MFA challenge instead of clicking through to the password page, announcing its number like number match. A password page in this mode fails at once with an error naming `D2L_PASSWORDLESS`. Every sign-in then needs a phone approval, so it is for interactive use only.
 
 Automatic verification-code sign-in is opt-in per account: `setup` option 3 takes an authenticator
 setup key or `otpauth://` URI, `saveSecureConfig` normalizes and stores it in the native credential
@@ -326,6 +336,7 @@ src/
     course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
     download-helpers.ts     Stream-to-disk with validation
     file-validator.ts       Magic-byte file-type checks
+    html-attributes.ts      Quote-aware tag attribute reading and entity decoding for raw D2L HTML
     html-converter.ts       HTML to Markdown via turndown
     pdf-extractor.ts        PDF text extraction via unpdf
     logger.ts               Structured logging
