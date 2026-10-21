@@ -26,7 +26,7 @@ export type CommandRunner = (
 /**
  * How an existing "brightspace" entry compares with the one setup writes.
  * `current` is a printable form of a different entry, so the user can see
- * what would be replaced and restore it later.
+ * what would be replaced. Arguments are hidden because they can carry credentials.
  */
 export type Registration =
   | { state: "missing" }
@@ -86,7 +86,13 @@ export function classifyRegistration(
   if (argv.length === expected.length && argv.every((part, i) => part === expected[i])) {
     return { state: "current" };
   }
-  return { state: "different", current: argv.join(" ") };
+  // A changed stdio entry may pass credentials as flags, inline code or URLs.
+  // Keep diagnostics useful without copying those arguments into chat/logs.
+  const basename = command.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  const name = ["node", "node.exe", "npx", "npx.cmd", "cmd", "cmd.exe"].includes(basename)
+    ? basename : "a command";
+  const count = argv.length - 1;
+  return { state: "different", current: `${name} [${count} argument${count === 1 ? "" : "s"} hidden]` };
 }
 
 function readJsonFile(filePath: string): unknown {
@@ -97,7 +103,7 @@ function readJsonFile(filePath: string): unknown {
   }
 }
 
-/** Codex keeps one global registry; `--json` exposes the entry's command. */
+/** Codex exposes the effective entry for this working directory as JSON. */
 function readCodexEntry(runCommand: CommandRunner): unknown {
   const lookup = runCommand("codex", ["mcp", "get", "brightspace", "--json"], "pipe");
   if (lookup.status === 0) {
