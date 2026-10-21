@@ -111,7 +111,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 ## One server for all your chats (optional)
 
-The normal command automatically shares a runtime. The optional direct HTTP mode below is for clients configured with a URL. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
+The normal command automatically shares a runtime and needs none of the manual steps below. Use this optional direct HTTP mode only when you deliberately want clients to connect by URL. It uses the same saved password, session and sign-in as the normal command.
 
 1. **Make a secret token, once.** Chats must present it, so other programs and web pages can't read your grades. Generate one:
    ```bash
