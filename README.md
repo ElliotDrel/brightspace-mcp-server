@@ -111,7 +111,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 ## One server for all your chats (optional)
 
-Normally every chat starts its own copy of the server. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
+The normal command automatically shares a runtime. The optional direct HTTP mode below is for clients configured with a URL. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
 
 1. **Make a secret token, once.** Chats must present it, so other programs and web pages can't read your grades. Generate one:
    ```bash
@@ -138,6 +138,14 @@ Things that change:
 - **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
 
 Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerunning `setup` does it) and stop the shared server.
+
+### Automatic sharing with normal setup
+
+The normal `brightspace-mcp-server` command now acts as a small stdio connector. On the first MCP request (usually initialization), it starts or reuses one shared local runtime for the same package version, working directory and settings. Existing setup commands and MCP entries stay unchanged. There is no manual server startup, URL entry, token helper, startup task or service to configure.
+
+The runtime keeps the existing tools, prompts, saved sign-in and HTTP security checks. Its internal bearer token stays in the OS credential store. Simultaneous starts converge on one listener. After five minutes without requests it stops; a later request starts it again. Calls already running finish before idle shutdown. A failed call is reported rather than replayed automatically.
+
+`brightspace-mcp-server stdio` runs the direct per-client server for troubleshooting. Hosts without an available native credential store fall back to that mode automatically. The explicit `http` command above remains available for clients you deliberately configure with a URL.
 
 ## When it asks you to sign in
 

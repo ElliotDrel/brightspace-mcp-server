@@ -58,6 +58,9 @@ export interface HttpServerOptions {
   token: string;
   /** 0 picks a free port (tests). */
   port: number;
+  /** Managed servers stop after inactivity, never during an active request. */
+  idleTimeoutMs?: number;
+  onIdle?: () => void;
 }
 
 export interface RunningHttpServer {
@@ -124,7 +127,7 @@ function readBody(req: IncomingMessage): Promise<string> {
  * carry no Origin other than this server's own (a page in a browser always
  * sends one), and present the bearer token.
  */
-export function startHttpServer({ runtime, token, port }: HttpServerOptions): Promise<RunningHttpServer> {
+export function startHttpServer({ runtime, token, port, idleTimeoutMs, onIdle }: HttpServerOptions): Promise<RunningHttpServer> {
   const expectedToken = createHash("sha256").update(token).digest();
   const authorized = (header: string | undefined): boolean => {
     const match = /^Bearer[ ]+(\S+)[ ]*$/i.exec(header ?? "");
@@ -134,6 +137,7 @@ export function startHttpServer({ runtime, token, port }: HttpServerOptions): Pr
   let allowedOrigins = new Set<string>();
   let closing = false;
   let active = 0;
+  let lastActivity = Date.now();
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!allowedHosts.has(req.headers.host ?? "")) return sendError(res, 403, "Forbidden: unexpected Host header");
@@ -177,8 +181,10 @@ export function startHttpServer({ runtime, token, port }: HttpServerOptions): Pr
 
   const httpServer = createServer((req, res) => {
     active += 1;
+    lastActivity = Date.now();
     res.once("close", () => {
       active -= 1;
+      lastActivity = Date.now();
       // A keep-alive connection that just finished its last request would
       // otherwise hold a closing server open until it timed out.
       if (closing) setImmediate(() => httpServer.closeIdleConnections());
@@ -203,6 +209,15 @@ export function startHttpServer({ runtime, token, port }: HttpServerOptions): Pr
       allowedHosts = new Set([`${HTTP_HOST}:${bound}`, `localhost:${bound}`]);
       allowedOrigins = new Set([`http://${HTTP_HOST}:${bound}`, `http://localhost:${bound}`]);
       httpServer.on("error", (error) => log("ERROR", "Shared HTTP server error", error));
+      const idleTimer = idleTimeoutMs ? setInterval(() => {
+        if (!closing && active === 0 && Date.now() - lastActivity >= idleTimeoutMs) {
+          closing = true;
+          httpServer.close(() => onIdle?.());
+          httpServer.closeIdleConnections();
+        }
+      }, Math.min(idleTimeoutMs, 1000)) : undefined;
+      idleTimer?.unref();
+      httpServer.once("close", () => { if (idleTimer) clearInterval(idleTimer); });
       resolve({
         url: `http://${HTTP_HOST}:${bound}${MCP_PATH}`,
         port: bound,

@@ -67,6 +67,25 @@ describe("shared localhost HTTP server", { timeout: 30_000 }, () => {
     vi.unstubAllGlobals();
   });
 
+  it("stops an idle managed listener", async () => {
+    const onIdle = vi.fn();
+    running = await startHttpServer({ runtime: createRuntime(config, "test"), token: TOKEN, port: 0, idleTimeoutMs: 50, onIdle });
+    await vi.waitFor(() => expect(onIdle).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(running.server.listening).toBe(false);
+  });
+
+  it("does not idle-stop while a request body is still arriving", async () => {
+    const onIdle = vi.fn();
+    running = await startHttpServer({ runtime: createRuntime(config, "test"), token: TOKEN, port: 0, idleTimeoutMs: 100, onIdle });
+    const req = request(running.url, { method: "POST", headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" } });
+    req.on("error", () => {});
+    req.write('{');
+    await new Promise((done) => setTimeout(done, 250));
+    expect(onIdle).not.toHaveBeenCalled();
+    req.end('}');
+    await vi.waitFor(() => expect(onIdle).toHaveBeenCalledTimes(1), { timeout: 2000 });
+  });
+
   async function listen(runtime: ServerRuntime = createRuntime(config, "test")): Promise<RunningHttpServer> {
     running = await startHttpServer({ runtime, token: TOKEN, port: 0 });
     return running;
