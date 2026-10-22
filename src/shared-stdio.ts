@@ -80,11 +80,14 @@ export async function relayMessage(line: string, connector: SharedConnector, wri
   let message: { id?: unknown; method?: string };
   try { message = JSON.parse(line); }
   catch { write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })); return; }
+  let answered = false;
   try {
     const { url, token } = await connector.ready();
     const emit = (data: string) => {
+      const reply = JSON.parse(data);
+      if (message && message.id !== undefined && reply?.id === message.id && ("result" in reply || "error" in reply)) answered = true;
       if (message?.method === "initialize") {
-        const version = JSON.parse(data)?.result?.protocolVersion;
+        const version = reply?.result?.protocolVersion;
         if (typeof version === "string") connector.protocolVersion = version;
       }
       write(data);
@@ -94,14 +97,18 @@ export async function relayMessage(line: string, connector: SharedConnector, wri
       ...(connector.protocolVersion ? { "MCP-Protocol-Version": connector.protocolVersion } : {}),
     }, body: line });
     if (!response.ok) { await response.body?.cancel(); throw new Error("Shared server request failed"); }
-    if (response.status === 202 || !response.body) return;
+    if (response.status === 202 || !response.body) {
+      if (message && message.id !== undefined) throw new Error("Missing JSON-RPC response");
+      return;
+    }
     if (response.headers.get("content-type")?.includes("text/event-stream")) {
       const lines = createInterface({ input: Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]) });
       for await (const event of lines) if (event.startsWith("data:")) emit(event.slice(5).trimStart());
     } else emit(await response.text());
+    if (message && message.id !== undefined && !answered) throw new Error("Incomplete JSON-RPC response");
   } catch {
     // Never replay a tool call after a possibly partial execution.
-    if (message && message.id !== undefined) write(JSON.stringify({ jsonrpc: "2.0", id: message.id,
+    if (message && message.id !== undefined && !answered) write(JSON.stringify({ jsonrpc: "2.0", id: message.id,
       error: { code: -32603, message: "Shared Brightspace server unavailable. Retry the request; its server will start automatically." },
     }));
   }

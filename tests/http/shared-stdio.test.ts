@@ -54,6 +54,23 @@ describe("normal shared startup", () => {
 
 describe("transparent JSON-RPC relay", () => {
   const connector = { ready: async () => ({ url: address.url, token: "secret" }) };
+  it("returns an error without replay when a stream ends before its response", async () => {
+    const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: 7, progress: 1 } };
+    const fetch = vi.fn(async () => new Response(`data: ${JSON.stringify(progress)}\n\n`, { headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetch);
+    const write = vi.fn();
+    await relayMessage('{"jsonrpc":"2.0","id":9,"method":"tools/call"}', connector, write);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls.map(([line]) => JSON.parse(line))).toEqual([progress, expect.objectContaining({ id: 9, error: expect.objectContaining({ code: -32603 }) })]);
+  });
+  it("rejects an empty accepted response to a request without replay", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    const write = vi.fn();
+    await relayMessage('{"jsonrpc":"2.0","id":9,"method":"tools/call"}', connector, write);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(write.mock.calls[0][0])).toMatchObject({ id: 9, error: { code: -32603 } });
+  });
   it("preserves streaming progress and the final tool response", async () => {
     const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: 7, progress: 1 } };
     const reply = { jsonrpc: "2.0", id: 9, result: { content: [{ type: "text", text: "done" }] } };
