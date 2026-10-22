@@ -441,7 +441,9 @@ async function downloadCourseFile(
   log("INFO", `Downloading course file: courseId=${courseId}, path=${filePath}`);
 
   const response = await apiClient.getPageRaw(
-    `${QUICKLINK_PATH}?ou=${courseId}&type=coursefile&fileId=${encodeURIComponent(filePath)}`
+    filePath.startsWith("/content/enforced/")
+      ? filePath
+      : `${QUICKLINK_PATH}?ou=${courseId}&type=coursefile&fileId=${encodeURIComponent(filePath)}`
   );
   if (!response) {
     return errorResponse(
@@ -461,7 +463,9 @@ async function downloadCourseFile(
   }
 
   const disposition = response.headers.get("Content-Disposition") ?? "";
-  const filename = parseContentDispositionFilename(disposition) ?? filePath.split("/").pop() ?? "download";
+  const fallbackName = filePath.split("/").pop() ?? "download";
+  const filename = parseContentDispositionFilename(disposition) ??
+    (filePath.startsWith("/content/enforced/") ? decodeURIComponent(fallbackName) : fallbackName);
   return finishDownload(response, filename, downloadPath, customFilename, "Course file");
 }
 

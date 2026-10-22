@@ -10,15 +10,36 @@ import { toBrightspacePath } from "./transcript/lti.js";
 export const QUICKLINK_PATH = "/d2l/common/dialogs/quickLink/quickLink.d2l";
 
 /**
- * Reduce a coursePath argument to a plain course-file path ("Notes/a.pdf").
- * Accepts that path or the quickLink URL a module description carries, and
- * refuses anything that could name a file outside the course file store, so
- * the argument can only ever steer the request inside this course's files.
- * An absolute quickLink URL must be on `origin`; without one, only a
- * root-relative link is accepted.
+ * Resolve a relative course-file path, coursefile quickLink, or canonical
+ * /content/enforced/<course-folder>/<file> link. Absolute links must be on
+ * `origin`. Canonical links keep their tenant-assigned folder (not courseId);
+ * Brightspace enforces the signed-in user's access to that file.
  */
 export function parseCoursePath(input: string, courseId: number, origin?: string): string | { error: string } {
   let filePath = input.trim();
+
+  // Enforced links name the tenant's course folder, which need not equal
+  // courseId. Keep that full path: dropping its folder can select another file.
+  const rawPath = filePath.replace(/^https?:\/\/[^/]+/i, "");
+  if (rawPath.startsWith("/content/enforced/")) {
+    const invalid = { error: "coursePath must be a safe same-site /content/enforced/<course-folder>/<file> path." };
+    try {
+      const target = new URL(filePath, origin ?? "https://brightspace.invalid");
+      if (
+        (!filePath.startsWith("/content/enforced/") && !origin) ||
+        target.origin !== new URL(origin ?? "https://brightspace.invalid").origin ||
+        target.username || target.password || /[?#\\\x00-\x20\x7f]/.test(rawPath)
+      ) return invalid;
+      const segments = rawPath.slice("/content/enforced/".length).split("/");
+      if (segments.length < 2 || segments.some(segment => {
+        const decoded = decodeURIComponent(segment);
+        return decoded === "" || decoded === "." || decoded === ".." || /[/\\%\x00-\x1f\x7f]/.test(decoded);
+      })) return invalid;
+      return target.pathname;
+    } catch {
+      return invalid;
+    }
+  }
 
   // A plain course-file path never starts with "/" or names a scheme, so
   // anything that does is a link, however its file name reads.

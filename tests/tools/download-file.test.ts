@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { convertHtmlToMarkdown } from "../../src/utils/html-converter.js";
 import { oversizeBody, CHUNKS_AT_CAP } from "./oversize-body.js";
 
 vi.mock("../../src/utils/update-checker.js", () => ({ getUpdateNotice: vi.fn(() => null) }));
@@ -956,6 +957,45 @@ describe("download_file: instructor assignment attachments", () => {
 });
 
 describe("download_file: course file links (coursePath)", () => {
+  it.each(["", "https://purdue.brightspace.com"])("downloads the canonical assignment instruction link (%s)", async origin => {
+    const href = `${origin}/content/enforced/12345-Course/Notes/Question%20HW5.pdf`;
+    // get_assignments returns CustomInstructions through this same converter.
+    const { markdown } = convertHtmlToMarkdown(`<a href="${href}">Question</a>`);
+    const coursePath = markdown.match(/\]\(([^)]+)\)/)![1];
+    const { call, pageRequested } = setup({});
+    const result = await call({ courseId: COURSE, coursePath, downloadPath: targetDir });
+    expect(result.isError).not.toBe(true);
+    expect(pageRequested).toEqual(["/content/enforced/12345-Course/Notes/Question%20HW5.pdf"]);
+    expect(await walk(root)).toEqual(["a/b/Question HW5.pdf"]);
+  });
+
+  it.each([
+    "https://evil.example/content/enforced/123-Course/a.pdf",
+    "https://purdue.brightspace.com.evil.example/content/enforced/123-Course/a.pdf",
+    "https://purdue.brightspace.com:444/content/enforced/123-Course/a.pdf",
+    "//evil.example/content/enforced/123-Course/a.pdf",
+    "http://purdue.brightspace.com/content/enforced/123-Course/a.pdf",
+    "https://user:pw@purdue.brightspace.com/content/enforced/123-Course/a.pdf",
+    "/content/enforced/123-Course/../a.pdf",
+    "/content/enforced/123-Course/%2e%2e/a.pdf",
+    "/content/enforced/123-Course/%252e%252e/a.pdf",
+    "/content/enforced/123-Course/a%2fb.pdf",
+    "/content/enforced/123-Course/a%5cb.pdf",
+    "/content/enforced/123-Course/a\\b.pdf",
+    "/content/enforced/123-Course//a.pdf",
+    "/content/enforced/123-Course/",
+    "/content/enforced/123-Course/a.pdf?redirect=https://evil.example",
+    "/content/enforced/123-Course/a.pdf#fragment",
+    "/content/enforced/123-Course/%00a.pdf",
+    "/content/enforced/123-Course/%zz.pdf",
+  ])("rejects unsafe canonical link %s before HTTP", async coursePath => {
+    const { call, pageRequested, rawRequested } = setup({});
+    const result = await call({ courseId: COURSE, coursePath, downloadPath: targetDir });
+    expect(result.isError).toBe(true);
+    expect(pageRequested).toEqual([]);
+    expect(rawRequested).toEqual([]);
+  });
+
   const QUICKLINK = (id: number, file: string) =>
     `/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${id}&type=coursefile&fileId=${encodeURIComponent(file)}`;
 
