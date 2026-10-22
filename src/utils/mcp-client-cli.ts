@@ -93,16 +93,20 @@ export function classifyRegistration(
   platform: NodeJS.Platform = process.platform
 ): Registration {
   if (entry === undefined) return { state: "missing" };
-  if (entry === null || typeof entry !== "object") {
-    return { state: "different", current: "(an entry setup could not read)" };
-  }
+  const unreadable: Registration = { state: "different", current: "(an entry setup could not read)" };
+  if (entry === null || typeof entry !== "object") return unreadable;
 
   const { command, args, url } = entry as { command?: unknown; args?: unknown; url?: unknown };
   if (typeof command !== "string" && typeof url === "string") {
-    return isSharedServerUrl(url) ? { state: "shared_http", url } : { state: "different", current: url };
+    // Shown without user-info, query or fragment: a token in the URL must not
+    // reach the setup message or the prepare JSON (#295).
+    const shown = displayUrl(url);
+    if (shown === null) return unreadable;
+    return isSharedServerUrl(url) ? { state: "shared_http", url: shown } : { state: "different", current: shown };
   }
   if (typeof command !== "string") {
-    return { state: "different", current: JSON.stringify(entry) };
+    const transport = describeTransport(entry);
+    return transport === null ? unreadable : { state: "different", current: transport };
   }
   const argv = [command, ...(Array.isArray(args) ? args.map(String) : [])];
   const expected = serverCommand(platform);
@@ -110,6 +114,35 @@ export function classifyRegistration(
     return { state: "current" };
   }
   return { state: "different", current: argv.join(" ") };
+}
+
+/**
+ * A URL with its user-info, query and fragment removed, which is where a
+ * token in a URL rides. Null when it doesn't parse.
+ */
+function displayUrl(url: string): string | null {
+  if (!URL.canParse(url)) return null;
+  const parsed = new URL(url);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.href;
+}
+
+/**
+ * A commandless entry with no string `url` (Windsurf's `serverUrl`, Gemini's
+ * `httpUrl`), reduced to its transport label and its cleaned URL. Everything
+ * else (headers, env, credential helpers, unknown fields) can carry secrets,
+ * so it never prints.
+ */
+function describeTransport(entry: object): string | null {
+  const { type, serverUrl, httpUrl } = entry as { type?: unknown; serverUrl?: unknown; httpUrl?: unknown };
+  const raw = typeof serverUrl === "string" ? serverUrl : typeof httpUrl === "string" ? httpUrl : null;
+  const shown = raw === null ? null : displayUrl(raw);
+  if (shown === null) return null;
+  const label = typeof type === "string" && /^[\w-]+$/.test(type) ? { type } : {};
+  return JSON.stringify({ ...label, url: shown });
 }
 
 function readJsonFile(filePath: string): unknown {
