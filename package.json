@@ -12,6 +12,7 @@
   },
   "files": [
     "build",
+    "scripts/install-browser.cjs",
     "README.md",
     "LICENSE"
   ],
@@ -24,7 +25,8 @@
     "dev": "tsc --watch",
     "test": "vitest",
     "test:run": "vitest run",
-    "postinstall": "npx playwright install chromium"
+    "test:install": "node scripts/install-smoke.mjs",
+    "postinstall": "node scripts/install-browser.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

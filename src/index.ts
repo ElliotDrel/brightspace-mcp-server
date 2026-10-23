@@ -33,7 +33,7 @@ const PKG_VERSION = (() => {
 
 // ── Subcommand routing (before any MCP initialization) ──────────────
 const subcommand = process.argv[2];
-const COMMANDS = ['setup', 'auth', 'doctor', 'http'];
+const COMMANDS = ['setup', 'auth', 'doctor', 'repair', 'http'];
 
 // A mistyped command (`htp`) must not quietly start a stdio server that sits
 // waiting on stdin. Flags alone still mean the default stdio server.
@@ -46,7 +46,8 @@ if (subcommand !== undefined && !subcommand.startsWith('-') && !COMMANDS.include
     '  http     run one shared MCP server on localhost\n' +
     '  setup    configure your school and sign-in\n' +
     '  auth     sign in to Brightspace now\n' +
-    '  doctor   check the install and configuration\n',
+    '  doctor   check the install and configuration\n' +
+    '  repair   restore and verify this installation\'s Chromium\n',
   );
   process.exit(2);
 }
@@ -57,6 +58,8 @@ if (subcommand === 'setup') {
   await import('./auth-cli.js');
 } else if (subcommand === 'doctor') {
   await import('./doctor.js');
+} else if (subcommand === 'repair') {
+  await (await import('./repair.js')).main();
 } else {
   // ── MCP Server (default: stdio; `http`: one shared localhost server) ──
   const http = subcommand === 'http';
@@ -94,7 +97,7 @@ if (subcommand === 'setup') {
       // see createRuntime.
       let stdioServer: McpServer | undefined;
       const runtime = createRuntime(config, PKG_VERSION, http ? undefined : (message) => {
-        void stdioServer?.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
+        void stdioServer?.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => { });
       });
 
       // Check for updates now, then every few hours. A stdio server can stay
