@@ -206,7 +206,7 @@ export function registerGetVideoTranscript(
           resolvedUrl = resolved.url;
         } else {
           return errorResponse(
-            "Provide either videoUrl, or both courseId and topicId to look up the video from course content."
+            "Provide either videoUrl, or both courseId and topicId to look up the video from course content.", "validation"
           );
         }
 

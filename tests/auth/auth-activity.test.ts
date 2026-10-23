@@ -26,7 +26,7 @@ afterEach(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
-it("keeps tool and recovery IDs on child callbacks fired outside the MCP call context", async () => {
+it.each([false, true])("keeps tool/recovery IDs on external callbacks, including early MFA completion (%s)", async early => {
   root = mkdtempSync(join(tmpdir(), "auth-activity-"));
   vi.stubEnv("D2L_DEV_MODE", "true");
   configureDevActivity(root, { version: "5.0.11", role: "server" });
@@ -58,6 +58,10 @@ it("keeps tool and recovery IDs on child callbacks fired outside the MCP call co
   const secondReady = new Promise<void>(resolve => { entered.push(resolve); });
   const second = client.callTool({ name: "second" });
   await secondReady;
+  if (early) {
+    children[0].stdout.write("MFA_NUMBER:42\n");
+    await first;
+  }
   // Emit in reverse order from the test's context, as an external event source.
   children[1].stdout.write("AUTH_PHASE:silentSso:20\n");
   children[1].emit("close", 0);
@@ -66,6 +70,11 @@ it("keeps tool and recovery IDs on child callbacks fired outside the MCP call co
   await Promise.all([first, second]);
   const rows = readdirSync(join(root, "dev-activity")).flatMap(file =>
     readFileSync(join(root, "dev-activity", file), "utf8").trim().split("\n").map(line => JSON.parse(line)));
+  if (early) {
+    expect(rows.findIndex(row => row.event === "tool_finished" && row.tool === "first"))
+      .toBeLessThan(rows.findIndex(row => row.event === "recovery_finished" && row.tool === "first"));
+    expect(JSON.stringify(rows)).not.toContain('"42"');
+  }
   const recoveryIds = vi.mocked(spawn).mock.calls.map(call => (call[2] as any).env.D2L_DEV_RECOVERY_ID);
   expect(new Set(recoveryIds).size).toBe(2);
   for (const [index, name] of ["first", "second"].entries()) {

@@ -69,7 +69,7 @@ export function registerGetDropboxFeedback(
         // lets a student read once it is released.
         const own = parsed.entityId === undefined;
         if (own && parsed.entityType === "group") {
-          return errorResponse("entityId is required when entityType is group.");
+          return errorResponse("entityId is required when entityType is group.", "validation");
         }
         const entityType = parsed.entityType ?? "user";
         const entityId = parsed.entityId ?? await fetchCurrentUserId(apiClient);

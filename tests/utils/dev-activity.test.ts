@@ -7,6 +7,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { configureDevActivity, devActivity, trackToolActivity, withRecoveryActivity, recoveryActivityEnvironment } from "../../src/utils/dev-activity.js";
+import { registerDownloadFile } from "../../src/tools/download-file.js";
+import { registerGetDropboxFolders } from "../../src/tools/get-dropbox-folders.js";
+import { httpOperation } from "../../src/utils/diagnostic-fields.js";
 import { ApiError, NetworkError } from "../../src/api/errors.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 import { errorResponse, sanitizeError } from "../../src/tools/tool-helpers.js";
@@ -173,6 +176,48 @@ describe("dev activity", () => {
     expect(records().filter(r => r.event === "tool_finished").map(r => r.errorKind))
       .toEqual(["permissionDenied", "unsupportedFormat", "destinationMissing", "transport", "unknown", undefined]);
     expect(JSON.stringify(records())).not.toContain("private-");
+  });
+  it("retains known categories from real handled download and staff-only tool failures", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const api = {
+      le: (_course: number, path: string) => path,
+      get: vi.fn(async () => { throw new ApiError(403, "/private-path", "private-body"); }),
+    };
+    const c = await connect(s => {
+      registerDownloadFile(s, api as any);
+      registerGetDropboxFolders(s, api as any);
+    });
+    await c.callTool({ name: "download_file", arguments: { courseId: 1, topicId: 2, downloadPath: "private-relative" } });
+    await c.callTool({ name: "download_file", arguments: { courseId: 1, topicId: 2, downloadPath: join(root, "private-missing") } });
+    await c.callTool({ name: "get_dropbox_folders", arguments: { courseId: 1 } });
+    api.get.mockResolvedValueOnce([] as never);
+    await c.callTool({ name: "download_file", arguments: { courseId: 1, folderId: 2, fileId: 3 } });
+    api.get.mockResolvedValueOnce([{ Id: 2, Attachments: [{ FileId: 3, Size: Number.MAX_SAFE_INTEGER }] }] as never);
+    await c.callTool({ name: "download_file", arguments: { courseId: 1, folderId: 2, fileId: 3, source: "assignmentAttachment" } });
+    expect(records().filter(r => r.event === "tool_finished").map(r => r.errorKind))
+      .toEqual(["validation", "destinationMissing", "permissionDenied", "notFound", "tooLarge"]);
+    expect(api.get).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(records())).not.toContain("private-");
+  });
+  it.each([
+    ["/d2l/api/le/1.90/123/quizzes/", "quizList"],
+    ["/d2l/api/le/1.90/123/quizzes/456", "quiz"],
+    ["/d2l/api/le/1.90/123/quizzes/456/attempts/", "quizAttempts"],
+    ["/d2l/api/le/1.90/123/dropbox/folders/", "dropboxFolders"],
+    ["/d2l/api/le/1.90/123/dropbox/folders/456", "dropboxFolder"],
+    ["/d2l/api/le/1.90/123/dropbox/folders/456/attachments/789", "dropboxAttachment"],
+    ["/d2l/api/le/1.90/123/dropbox/folders/456/submissions/789/files/10/download", "submissionFile"],
+    ["/d2l/api/le/1.90/123/content/topics/456/file", "contentFile"],
+    ["/d2l/api/le/1.90/123/news/456/attachments/789", "newsAttachment"],
+    ["/d2l/api/le/1.90/123/rubrics?objectType=Dropbox&objectId=456", "rubrics"],
+    ["/d2l/api/le/1.90/123/overview", "overview"],
+    ["/d2l/api/le/1.90/123/overview/attachment", "overviewAttachment"],
+    ["/d2l/api/le/1.90/lti/link/123/", "ltiLinks"],
+    ["/d2l/common/dialogs/quickLink/quickLink.d2l?ou=123&type=coursefile&fileId=private-name", "quickLink"],
+  ])("labels existing route %s without identifiers or query values", (path, operation) => {
+    devActivity("http_response", { operation: httpOperation(path + "#private-fragment") });
+    expect(records()[0].operation).toBe(operation);
+    expect(JSON.stringify(records())).not.toMatch(/private-|d2l\/|objectId|coursefile/);
   });
   it("labels optional HTTP failures by operation without turning a successful tool into an error", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response("private-response", {

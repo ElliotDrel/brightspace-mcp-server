@@ -36,7 +36,9 @@ Failed handlers also record an allowlisted `errorKind`: `validation`,
 `destinationMissing`, `permissionDenied`, `notFound`, `unsupportedFormat`,
 `tooLarge`, `authentication`, `transport`, `rateLimited`, `providerBlocked` or
 `unknown`. Typed exceptions retain their category when converted to an MCP
-error result. Direct error results without a known category use `unknown`;
+error result. Handled validation, missing-file/destination, oversized-file and
+permission failures carry explicit categories too. Direct error results without
+a known category use `unknown`;
 the logger never guesses from user-facing text. Successful results omit it.
 
 Authentication events include `http_response`, `auth_required`,
@@ -51,7 +53,10 @@ explains which condition triggered renewal.
 
 `http_response` includes the status, time to response headers (`elapsedMs`), and
 an allowlisted semantic `operation`, such as `quizAttempts`, `dropboxSubmissions`
-or `dropboxFeedback`. Paths, identifiers and queries are never recorded.
+or `dropboxFeedback`. Detail/file operations are separate from lists (for example,
+`quiz`, `contentFile`, `dropboxAttachment`, `submissionFile`, `newsAttachment`),
+and syllabus discovery identifies `rubrics`, `overview`, `overviewAttachment`,
+`ltiLinks` and `quickLink`. Paths, identifiers and queries are never recorded.
 `http_failed` records a transport failure while fetching/reading a response;
 each retry is a separate attempt. `cache_hit` and `http_coalesced` identify a
 cached result or a request joined to an existing GET. Optional HTTP failures can

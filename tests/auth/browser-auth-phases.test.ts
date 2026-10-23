@@ -87,6 +87,14 @@ describe("BrowserAuth phase timings", () => {
     expect(devActivity).toHaveBeenCalledWith("mfa_remembered", { rememberMfa: "unknown" });
   });
 
+  it("reports saved-state read failure before launching a browser without the error detail", async () => {
+    mocks.load.mockRejectedValue(new Error("private-storage-detail"));
+    await expect(newAuth().authenticate()).rejects.toThrow();
+    expect(devActivity).toHaveBeenCalledWith("browser_state_loaded", { outcome: "error" });
+    expect(mocks.launch).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(devActivity).mock.calls)).not.toContain("private-");
+  });
+
   it("splits a login at the MFA challenge into credentials and approval wait", async () => {
     const auth = newAuth();
     page.goto = vi.fn(async () => { vi.advanceTimersByTime(3000); return null; });
