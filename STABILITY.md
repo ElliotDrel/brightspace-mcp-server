@@ -30,12 +30,12 @@ Node.js 22 or newer (`engines` in `package.json`). 5.0.0 dropped Node 20, becaus
     and `--sign-in` exit 2 when stdin is not a terminal, instead of waiting for typing.
 - `http` — since 4.1.0, one shared MCP server over Streamable HTTP on `127.0.0.1` (`/mcp`),
   default port 18765 (`--port` or `D2L_HTTP_PORT`). Requires `D2L_HTTP_TOKEN` (at least 32
-  characters) as a bearer token on every request. Plain stdio stays the default.
+  characters) as a bearer token on every request. Stdio stays the default client transport; its normal command automatically starts/reuses a shared runtime.
 - `doctor` — `--json` prints `{checks: [{id, ok, line}], allOk, notes}`. Check ids may be
   added (4.0.0 added `browser`).
 - `auth` — manual re-authentication, no required flags. `--automatic` is internal
   (used by `AuthRunner` to retry in the background) and not a documented user flag.
-- No subcommand — runs the MCP server itself.
+- No subcommand � runs the normal stdio connector. It automatically starts/reuses one runtime per version, working directory and settings; that runtime stops after five idle minutes. `stdio` explicitly runs the direct per-client runtime, also used if the native credential store is unavailable.
 
 ## Environment variables
 

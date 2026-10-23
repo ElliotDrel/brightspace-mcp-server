@@ -111,7 +111,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 ## One server for all your chats (optional)
 
-Normally every chat starts its own copy of the server. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
+The normal command automatically shares a runtime and needs none of the manual steps below. Use this optional direct HTTP mode only when you deliberately want clients to connect by URL. It uses the same saved password, session and sign-in as the normal command.
 
 1. **Make a secret token, once.** Chats must present it, so other programs and web pages can't read your grades. Generate one:
    ```bash
@@ -138,7 +138,15 @@ Things that change:
 - **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
 - **Updating it:** restart the server, not Codex. Restarting a client only reconnects it to the server that is already running the old version. Stop the server and start the same `http` command again with the same `D2L_HTTP_TOKEN`, port, and settings; from a source checkout, run `npm run update` first. Update notices from a shared server say this too.
 
-Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerun `setup` and say yes when it offers to switch Codex back to its own copy per chat) and stop the shared server.
+Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To return to normal command-based setup, put the `command`/`args` entry back (rerun `setup` and say yes when it offers to switch Codex back from HTTP) and stop the manually managed server. Normal startup manages the shared runtime automatically.
+
+### Automatic sharing with normal setup
+
+The normal `brightspace-mcp-server` command acts as a small stdio connector. On the first MCP request (usually initialization), it starts or reuses one shared local runtime for the same package version, working directory and settings. Existing setup commands and MCP entries stay unchanged. There is no manual server startup, URL entry, token helper, startup task or service to configure.
+
+The runtime keeps the existing tools, prompts, saved sign-in and HTTP security checks. Its internal bearer token stays in the OS credential store. Simultaneous starts converge on one listener. After five minutes without requests it stops; a later request starts it again. Calls already running finish before idle shutdown. A failed call is reported rather than replayed automatically.
+
+`brightspace-mcp-server stdio` runs the direct per-client server for troubleshooting. Hosts without an available native credential store fall back to that mode automatically. The explicit `http` command above remains available for clients you deliberately configure with a URL.
 
 ## When it asks you to sign in
 
@@ -161,6 +169,7 @@ How often you're asked is up to your school, not this tool. Everything else abou
 - Run `npx -y brightspace-mcp-server@latest doctor` first — it checks your Node version, the sign-in browser, saved setup, credential store, Brightspace connectivity, saved sign-in, and installed version, and tells you exactly what to fix.
 - **`Authentication failed: The native credential store is locked or unavailable.`** Your password store is locked or hasn't let this server read the saved password. Unlock it (on a Mac, log in or unlock Keychain Access), then run `npx -y brightspace-mcp-server@latest auth` again, or `setup` if that still fails, and choose **Always Allow** when Keychain asks.
 - **It works in the terminal but not in the app:** the app starts it separately and may not see your password store yet — see [docs/troubleshooting.md](docs/troubleshooting.md).
+- **The app says the server timed out while starting:** open the app's MCP server log. Each startup step prints a timestamped `Startup: ...` line before it begins and `done in N ms` when it ends, and a step still running after 10 seconds prints `Startup: still ...` once. The last such line names the step it was stuck in, often the saved-password lookup in your password store. These lines never include your username, password, or cookies.
 - **Which version do I have?** Ask your AI "which version of the Brightspace server am I running?"
 - **Still stuck?** [Open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) and paste what the terminal printed.
 

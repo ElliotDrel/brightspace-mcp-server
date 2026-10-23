@@ -270,8 +270,10 @@ While a sign-in is still being worked on in the background, `get_assignments`, `
 
 ```
 src/
-  index.ts                  Entrypoint: subcommand routing, stdio server (default) or `http`
+  index.ts                  Light entrypoint: subcommand routing, automatic shared stdio connector by default
   server.ts                 Shared runtime (session, sign-in, API client) and the McpServer factory that registers every tool and prompt
+  shared-stdio.ts           Automatic startup/reuse, native-store token, transparent JSON-RPC relay
+  serve.ts                  Full runtime initialization for direct stdio and HTTP
   http-server.ts            `http`: stateless Streamable HTTP on 127.0.0.1 with Host/Origin, bearer token, and body checks
   setup.ts                  `setup`: interactive wizard and `--sign-in`; routes `--prepare`
   setup/
@@ -360,8 +362,9 @@ src/
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, Chromium, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key). `--json` prints `{checks, allOk, notes}` instead |
-| `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
-| `npx -y brightspace-mcp-server@latest http` | Opt-in: one shared Streamable HTTP server at `http://127.0.0.1:18765/mcp` for every client on the computer, instead of one stdio process per chat. Needs `D2L_HTTP_TOKEN`; takes `--port`. The user starts it and keeps it running; clients connect by URL and never start it, and a second copy on a taken port exits with an error. Ctrl+C lets calls in progress finish. Setup steps: [README](README.md#one-server-for-all-your-chats-optional) |
+| `npx -y brightspace-mcp-server@latest` | Normal MCP connector: automatically start/reuse one runtime for matching version, working directory and settings; stop it after five idle minutes. No manual listener or URL configuration |
+| `npx -y brightspace-mcp-server@latest http` | Opt-in: one shared Streamable HTTP server at `http://127.0.0.1:18765/mcp` for every client on the computer, for explicitly URL-configured clients. Normal stdio setup shares its runtime automatically. Needs `D2L_HTTP_TOKEN`; takes `--port`. The user starts it and keeps it running; clients connect by URL and never start it, and a second copy on a taken port exits with an error. Ctrl+C lets calls in progress finish. Setup steps: [README](README.md#one-server-for-all-your-chats-optional) |
+| `npx -y brightspace-mcp-server@latest stdio` | Direct per-client runtime for troubleshooting; also the fallback when the native store is unavailable |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |
 | `npm run test` | Run Vitest suite |
