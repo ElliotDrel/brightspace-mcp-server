@@ -35,6 +35,10 @@ export const HTTP_OPERATIONS = ["versions", "courses", "identity", "quizList", "
 /** Only a fixed label crosses the boundary; identifiers and queries never do. */
 export function httpOperation(path: string): typeof HTTP_OPERATIONS[number] {
   const route = path.split(/[?#]/, 1)[0];
+  // File names may contain API nouns; classify the root route family first.
+  if (/^\/content\/enforced\//.test(route)) return "courseFile";
+  if (route.startsWith("/d2l/common/dialogs/quickLink/")) return "quickLink";
+  if (!route.startsWith("/d2l/api/")) return route.startsWith("/d2l/") ? "webPage" : "other";
   if (/^\/d2l\/api\/versions\/?$/.test(route)) return "versions";
   if (/\/users\/whoami\/?$/.test(route)) return "identity";
   if (/\/enrollments\/myenrollments\//.test(route)) return "courses";
@@ -48,7 +52,6 @@ export function httpOperation(path: string): typeof HTTP_OPERATIONS[number] {
   if (/\/dropbox\/folders\/[^/]+\/?$/.test(route)) return "dropboxFolder";
   if (/\/dropbox\/folders\//.test(route)) return "dropboxFolders";
   if (/\/grades\//.test(route)) return "grades";
-  if (/^\/content\/enforced\//.test(route)) return "courseFile";
   if (/\/content\/topics\/[^/]+\/file\/?$/.test(route)) return "contentFile";
   if (/\/content\//.test(route)) return "content";
   if (/\/news\/[^/]+\/attachments\//.test(route)) return "newsAttachment";
@@ -61,7 +64,5 @@ export function httpOperation(path: string): typeof HTTP_OPERATIONS[number] {
   if (/\/overview\/attachment\/?$/.test(route)) return "overviewAttachment";
   if (/\/overview\/?$/.test(route)) return "overview";
   if (/\/lti\/link\//.test(route)) return "ltiLinks";
-  if (route.startsWith("/d2l/common/dialogs/quickLink/")) return "quickLink";
-  if (route.startsWith("/d2l/") && !route.startsWith("/d2l/api/")) return "webPage";
   return "other";
 }

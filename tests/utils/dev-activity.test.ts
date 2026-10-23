@@ -200,6 +200,9 @@ describe("dev activity", () => {
     expect(JSON.stringify(records())).not.toContain("private-");
   });
   it.each([
+    ["/content/enforced/tenant-folder/quizzes/handout.pdf", "courseFile"],
+    ["/d2l/le/content/tenant-folder/dropbox/folders/handout.pdf", "webPage"],
+    ["/public/quizzes/handout.pdf", "other"],
     ["/d2l/api/le/1.90/123/quizzes/", "quizList"],
     ["/d2l/api/le/1.90/123/quizzes/456", "quiz"],
     ["/d2l/api/le/1.90/123/quizzes/456/attempts/", "quizAttempts"],
@@ -217,7 +220,7 @@ describe("dev activity", () => {
   ])("labels existing route %s without identifiers or query values", (path, operation) => {
     devActivity("http_response", { operation: httpOperation(path + "#private-fragment") });
     expect(records()[0].operation).toBe(operation);
-    expect(JSON.stringify(records())).not.toMatch(/private-|d2l\/|objectId|coursefile/);
+    expect(JSON.stringify(records())).not.toMatch(/private-|d2l\/|objectId|tenant-folder|handout\.pdf/);
   });
   it("labels optional HTTP failures by operation without turning a successful tool into an error", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response("private-response", {
