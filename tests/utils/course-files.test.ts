@@ -13,6 +13,13 @@ describe("canonical course-file path boundaries", () => {
     expect(parseCoursePath(`${ORIGIN}${filePath}`, 101, ORIGIN)).toBe(filePath);
   });
 
+  it.each([
+    `${ORIGIN}\\shadow/content/enforced/tenant-folder/a.pdf`,
+    `${ORIGIN}\t/content/enforced/tenant-folder/a.pdf`,
+  ])("rejects authority characters that URL parsing would normalize: %s", input => {
+    expect(parseCoursePath(input, 101, ORIGIN)).toHaveProperty("error");
+  });
+
   it("accepts a root-relative enforced path without an origin but refuses an absolute URL", () => {
     const filePath = "/content/enforced/tenant-folder/a.pdf";
     expect(parseCoursePath(filePath, 101)).toBe(filePath);

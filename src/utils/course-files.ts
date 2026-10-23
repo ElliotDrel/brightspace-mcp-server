@@ -28,7 +28,7 @@ export function parseCoursePath(input: string, courseId: number, origin?: string
       if (
         (!filePath.startsWith("/content/enforced/") && !origin) ||
         target.origin !== new URL(origin ?? "https://brightspace.invalid").origin ||
-        target.username || target.password || /[?#\\\x00-\x20\x7f]/.test(rawPath)
+        target.username || target.password || /[?#\\\x00-\x20\x7f]/.test(filePath)
       ) return invalid;
       const segments = rawPath.slice("/content/enforced/".length).split("/");
       if (segments.length < 2 || segments.some(segment => {
