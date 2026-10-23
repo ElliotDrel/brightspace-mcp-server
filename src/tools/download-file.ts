@@ -361,13 +361,13 @@ export function registerDownloadFile(
             const stats = await fs.stat(downloadPath);
             if (!stats.isDirectory()) {
               return errorResponse(
-                `Download path is not a directory: ${downloadPath}`
+                `Download path is not a directory: ${downloadPath}`, "validation"
               );
             }
           } catch (error: any) {
             if (error?.code === "ENOENT") {
               return errorResponse(
-                `Download directory does not exist: ${downloadPath}`
+                `Download directory does not exist: ${downloadPath}`, "destinationMissing"
               );
             }
             throw error;

@@ -89,7 +89,8 @@ export function registerGetDropboxFeedback(
                 ? "Brightspace refused this read of your own feedback; it has not been released yet, or " +
                   "this course does not expose it through the API. Check the assignment in Brightspace."
                 : "Instructor or TA access required for this course. Reading another user's grading " +
-                  "feedback is only granted to course staff; to read your own, omit entityType and entityId."
+                  "feedback is only granted to course staff; to read your own, omit entityType and entityId.",
+              "permissionDenied"
             );
           }
           if (error instanceof ApiError && error.status === 404) {
