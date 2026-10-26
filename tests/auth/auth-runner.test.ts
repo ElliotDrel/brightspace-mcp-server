@@ -118,6 +118,52 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Microsoft refuses a new prompt for an account while an earlier one is
+   * still open (UserAuthFailedDuplicateRequest, seen live 2026-10-25), and
+   * shows a "Verify your identity" list instead. The child reports that as
+   * AUTH_MFA_HELD, so callers hear the real wait, not "still starting".
+   */
+  it("answers mfaHeld at once when Microsoft holds the prompt, then upgrades a retry to the number", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld", numberMatch: undefined });
+    child.stdout.write("AUTH_MFA_HELD\n");
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    const retry = track(runner.run());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(retry.settled).toBe(false);
+    child.stdout.write("MFA_NUMBER:52\n");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retry.error).toMatchObject({ kind: "mfaPending", numberMatch: "52" });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a hold with a challenge that has no number", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld" });
+    child.stdout.write("AUTH_MFA_HELD\n");
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    const retry = track(runner.run());
+    await vi.advanceTimersByTimeAsync(1000);
+    child.stdout.write("MFA_PENDING\n");
+    await vi.advanceTimersByTimeAsync(45000);
+    expect(retry.error).toMatchObject({ kind: "mfaPending" });
+  });
+
+  it("reports a sign-in that ran out of time while held as mfaHeld, not unsupported", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld" });
+    child.stdout.write("AUTH_MFA_HELD\n");
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    const retry = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld" });
+    await vi.advanceTimersByTimeAsync(1000);
+    child.emit("close", 4);
+    await retry;
+  });
+
   it("answers automaticPending, not busy, when another process is signing in automatically", async () => {
     const runner = new AuthRunner();
     const failure = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending" });
@@ -948,6 +994,70 @@ describe("AuthRunner", () => {
       await failure;
       await vi.advanceTimersByTimeAsync(0);
       expect(runner.busy()).toBe(false);
+    });
+  });
+
+  // sign_out cancels a sign-in a user missed the prompt for, instead of
+  // leaving every retry to rejoin it until its 5-minute window runs out.
+  describe("cancel()", () => {
+    it("does nothing when no sign-in is running", async () => {
+      expect(await new AuthRunner().cancel()).toBe(false);
+      expect(kill).not.toHaveBeenCalled();
+    });
+
+    it("stops a sign-in waiting on MFA, answers the call polling it at once, and lets the next call start a new one", async () => {
+      const runner = new AuthRunner();
+      const first = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "27" });
+      child.stdout.write("MFA_NUMBER:27\n");
+      await first;
+      await vi.advanceTimersByTimeAsync(2000);
+      const retry = track(runner.run());
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(retry.settled).toBe(false);
+
+      const cancelling = runner.cancel();
+      await vi.advanceTimersByTimeAsync(0);
+      // SIGKILL, never SIGTERM: a graceful stop would record the MFA cooldown.
+      // Windows has no process groups; taskkill /t /f stops the tree instead.
+      if (process.platform === "win32") {
+        expect(execFileSync).toHaveBeenCalledWith("taskkill", ["/pid", "12345", "/t", "/f"], expect.any(Object));
+      } else {
+        expect(kill).toHaveBeenCalledWith(-12345, "SIGKILL");
+        expect(kill).toHaveBeenCalledWith(12346, "SIGKILL");
+      }
+      expect(kill).not.toHaveBeenCalledWith(expect.anything(), "SIGTERM");
+      expect(retry.error).toMatchObject({ kind: "cancelled" });
+      child.emit("exit", null, "SIGKILL");
+      expect(await cancelling).toBe(true);
+      expect(runner.busy()).toBe(false);
+
+      const next = mockChild();
+      vi.mocked(spawn).mockReturnValue(next as never);
+      const fresh = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "81" });
+      next.stdout.write("MFA_NUMBER:81\n");
+      await fresh;
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("answers a call still waiting for the sign-in to reach MFA", async () => {
+      const runner = new AuthRunner();
+      const waiting = expect(runner.run()).rejects.toMatchObject({ kind: "cancelled" });
+      const cancelling = runner.cancel();
+      child.emit("exit", null, "SIGKILL");
+      await waiting;
+      expect(await cancelling).toBe(true);
+    });
+
+    it("answers cancelled when another process killed the sign-in child", async () => {
+      const runner = new AuthRunner();
+      const first = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending" });
+      child.stdout.write("MFA_NUMBER:27\n");
+      await first;
+      await vi.advanceTimersByTimeAsync(2000);
+      const retry = expect(runner.run()).rejects.toMatchObject({ kind: "cancelled" });
+      await vi.advanceTimersByTimeAsync(1000);
+      child.emit("close", null, "SIGKILL");
+      await retry;
     });
   });
 });
